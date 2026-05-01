@@ -9,7 +9,7 @@
 
 ---
 ##还会持续更新，功能未完全实现，大家可以加群一起讨论一下实现方法，欢迎来抓虫~，加我进交流群，欢迎提Issues
-<img width="1106" height="1509" alt="a10e4079bdca90dbc8645ad8b5a996c1" src="https://github.com/user-attachments/assets/dc3d8887-e974-4caa-83c3-7c43bd3e258f" />
+<img width="400" height="400" alt="a10e4079bdca90dbc8645ad8b5a996c1" src="https://github.com/user-attachments/assets/dc3d8887-e974-4caa-83c3-7c43bd3e258f" />
 ## 什么是 AI WorkBench
 
 AI WorkBench 是一个全栈 AIOps 平台，将 LLM 推理能力与结构化工作流引擎结合，实现从告警接入到智能诊断、知识沉淀的全链路闭环。
