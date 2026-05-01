@@ -1,0 +1,113 @@
+workflow:
+  name: knowledge_enrich
+  description: 知识库自动沉淀 — 从已完成诊断中提取结构化数据 → 去重 → 自动入库
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收沉淀请求
+      inputs:
+        diagnosis_id: ""
+        diagnosis_report: ""
+        target_ip: ""
+        alert_title: ""
+      next: parameter_extractor
+
+    - id: parameter_extractor
+      type: parameter_extractor
+      title: 提取结构化字段
+      config:
+        text: "{{start.diagnosis_report}}"
+        parameters:
+          root_cause_category:
+            type: string
+            description: "根因分类，取值：cpu_high/memory_leak/disk_full/slow_sql/connection_pool/oom/network_issue/service_down/io_saturation/other"
+            required: true
+          root_cause_description:
+            type: string
+            description: "一句话根因描述"
+            required: true
+          treatment_steps:
+            type: string
+            description: "处置步骤，Markdown 格式"
+            required: true
+          keywords:
+            type: string
+            description: "关键词，逗号分隔"
+            required: true
+          metric_snapshot:
+            type: object
+            description: "关键指标快照，如 {cpu_usage_active: 95.3}"
+            required: false
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索是否已有相似案例
+      config:
+        query: "{{parameter_extractor.root_cause_description}} {{parameter_extractor.keywords}}"
+        top_k: 3
+        score_threshold: 0.8
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: condition_dedup
+
+    - id: condition_dedup
+      type: condition
+      title: 去重判断
+      conditions:
+        - id: has_duplicate
+          logic: and
+          rules:
+            - variable: "{{knowledge_retrieval.count}}"
+              operator: gt
+              value: 0
+          next: end_skip
+        - id: no_duplicate
+          logic: default
+          next: http_save_case
+
+    - id: http_save_case
+      type: http_request
+      title: 创建新案例
+      config:
+        method: POST
+        url: "http://127.0.0.1:8080/api/v1/knowledge/cases"
+        headers:
+          Content-Type: application/json
+        body:
+          id: "auto-{{start.diagnosis_id}}"
+          root_cause_category: "{{parameter_extractor.root_cause_category}}"
+          root_cause_description: "{{parameter_extractor.root_cause_description}}"
+          treatment_steps: "{{parameter_extractor.treatment_steps}}"
+          keywords: "{{parameter_extractor.keywords}}"
+          metric_snapshot: "{{parameter_extractor.metric_snapshot}}"
+          source_diagnosis_id: "{{start.diagnosis_id}}"
+          created_by: "workflow:knowledge_enrich"
+        timeout: 5000
+      next: end
+
+    - id: end_skip
+      type: end
+      title: 跳过（已有相似案例）
+      outputs:
+        action: skipped
+        reason: "已存在相似案例"
+        similar_cases: "{{knowledge_retrieval.results}}"
+
+    - id: end
+      type: end
+      title: 沉淀完成
+      outputs:
+        action: created
+        case_id: "auto-{{start.diagnosis_id}}"
+        category: "{{parameter_extractor.root_cause_category}}"
+
+  global:
+    error_handling: stop_on_failure
+    timeout: 60000
+    retry:
+      max_attempts: 1
+      backoff: 2000

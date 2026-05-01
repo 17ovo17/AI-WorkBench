@@ -1,0 +1,188 @@
+workflow:
+  name: db_lock_analysis
+  description: MySQL 死锁分析工作流 — 历史案例 + 锁信息/事务采集 + 锁图构建 + LLM 优化建议
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收死锁分析请求
+      inputs:
+        hostname: ""
+        db_name: ""
+        time_range: "1h"
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索死锁历史案例
+      config:
+        query: "mysql innodb deadlock {{start.db_name}}"
+        category: "db_deadlock"
+        top_k: 3
+        score_threshold: 0.3
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: http_db_locks
+
+    - id: http_db_locks
+      type: http_request
+      title: 获取锁等待信息
+      parallel_group: db_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/data/mysql/locks?host={{start.hostname}}&db={{start.db_name}}&range={{start.time_range}}"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"locks":[],"lock_waits":[]}'
+      next: code_lock_graph
+
+    - id: http_db_trx
+      type: http_request
+      title: 获取事务列表
+      parallel_group: db_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/data/mysql/transactions?host={{start.hostname}}&db={{start.db_name}}&range={{start.time_range}}"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"transactions":[],"deadlocks":[]}'
+      next: code_lock_graph
+
+    - id: code_lock_graph
+      type: code
+      title: 构建锁等待图
+      config:
+        language: javascript
+        timeout: 5000
+        code: |
+          function main(inputs) {
+            var locks, trx;
+            try { locks = JSON.parse(inputs.locks_response || '{}'); } catch (e) { locks = {}; }
+            try { trx = JSON.parse(inputs.trx_response || '{}'); } catch (e) { trx = {}; }
+
+            var lockWaits = locks.lock_waits || [];
+            var deadlocks = trx.deadlocks || [];
+            var transactions = trx.transactions || [];
+
+            // 构建有向图：waiting_trx -> blocking_trx
+            var edges = [];
+            var nodes = {};
+            for (var i = 0; i < lockWaits.length; i++) {
+              var w = lockWaits[i];
+              edges.push({ from: w.waiting_trx, to: w.blocking_trx, table: w.table, lock_mode: w.lock_mode });
+              nodes[w.waiting_trx] = { trx_id: w.waiting_trx, role: 'waiting' };
+              nodes[w.blocking_trx] = { trx_id: w.blocking_trx, role: 'blocking' };
+            }
+
+            // 检测环（简易：访问标记法）
+            var hasCycle = false;
+            for (var key in nodes) {
+              var visited = {}; var stack = [key]; var depth = 0;
+              while (stack.length && depth < 50) {
+                var cur = stack.pop(); depth++;
+                if (visited[cur]) { hasCycle = true; break; }
+                visited[cur] = true;
+                for (var j = 0; j < edges.length; j++) {
+                  if (edges[j].from === cur) stack.push(edges[j].to);
+                }
+              }
+              if (hasCycle) break;
+            }
+
+            // 表热点统计
+            var tableHotspots = {};
+            for (var k = 0; k < edges.length; k++) {
+              var t = edges[k].table || 'unknown';
+              tableHotspots[t] = (tableHotspots[t] || 0) + 1;
+            }
+            var topTables = Object.keys(tableHotspots).sort(function(a, b) { return tableHotspots[b] - tableHotspots[a]; }).slice(0, 5);
+
+            // 长事务统计
+            var longTrx = transactions.filter(function(t) { return (t.duration_sec || 0) > 30; }).slice(0, 10);
+
+            return {
+              total_lock_waits: lockWaits.length,
+              total_deadlocks: deadlocks.length,
+              total_transactions: transactions.length,
+              has_cycle: hasCycle,
+              top_hot_tables: topTables.map(function(t) { return { table: t, conflict_count: tableHotspots[t] }; }),
+              long_transactions: longTrx,
+              recent_deadlocks: deadlocks.slice(0, 5),
+              edges: edges.slice(0, 20)
+            };
+          }
+      inputs:
+        locks_response: "{{http_db_locks.response}}"
+        trx_response: "{{http_db_trx.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"total_deadlocks":0,"top_hot_tables":[]}'
+      next: llm_optimize
+
+    - id: llm_optimize
+      type: llm
+      title: LLM 死锁优化建议
+      config:
+        system_prompt: |
+          你是 MySQL DBA 专家，擅长 InnoDB 死锁分析。基于锁图、热点表、事务和历史案例，输出根因和优化方案。
+          关注：加锁顺序、索引设计、事务粒度、隔离级别、gap lock。
+          输出 JSON：{"root_cause":"根因描述","conflict_pattern":"循环等待|gap_lock|next_key_lock|长事务","optimization_plan":["优化建议1","优化建议2"],"sql_changes":["SQL 变更建议"],"isolation_level_recommendation":"RC|RR|建议保持","confidence":"HIGH|MEDIUM|LOW"}
+        user_prompt: |
+          ## 死锁分析请求
+          主机: {{start.hostname}}
+          数据库: {{start.db_name}}
+          时间范围: {{start.time_range}}
+
+          ## 锁图分析
+          锁等待数: {{code_lock_graph.total_lock_waits}}
+          死锁数: {{code_lock_graph.total_deadlocks}}
+          事务数: {{code_lock_graph.total_transactions}}
+          存在循环等待: {{code_lock_graph.has_cycle}}
+
+          ## 热点表
+          {{code_lock_graph.top_hot_tables}}
+
+          ## 长事务（>30s）
+          {{code_lock_graph.long_transactions}}
+
+          ## 最近死锁详情
+          {{code_lock_graph.recent_deadlocks}}
+
+          ## 历史案例
+          {{knowledge_retrieval.results}}
+
+          请输出死锁根因和优化方案，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"root_cause":"分析失败","confidence":"LOW"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出死锁分析结果
+      outputs:
+        analysis: "{{llm_optimize.result}}"
+        confidence: "{{llm_optimize.confidence}}"
+        lock_graph_summary:
+          total_deadlocks: "{{code_lock_graph.total_deadlocks}}"
+          has_cycle: "{{code_lock_graph.has_cycle}}"
+          hot_tables: "{{code_lock_graph.top_hot_tables}}"
+        metadata:
+          hostname: "{{start.hostname}}"
+          db_name: "{{start.db_name}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 150000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

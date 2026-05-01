@@ -1,0 +1,112 @@
+[
+  {
+    "id": "rb-001",
+    "title": "CPU 用户态飙高（Java GC / 应用层热点）",
+    "category": "cpu_high",
+    "trigger_conditions": "{\"metric\":\"cpu_usage_user\",\"operator\":\">\",\"threshold\":80,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\n# 查看 CPU 使用率分布\ntop -b -n 1 | head -20\nmpstat -P ALL 1 3\n# 找出 CPU 占用最高的进程\nps aux --sort=-%cpu | head -10\n```\n\n## 2. 应急处置\n```bash\n# 定位 PID 后查看其线程\ntop -H -p <PID>\n# Java 应用：导出线程栈\njstack <PID> > /tmp/jstack-$(date +%s).log\n# 查看 GC 状态\njstat -gcutil <PID> 1000 5\n# 紧急时降级（限流/熔断）\n# 调用业务限流接口或重启\n```\n\n## 3. 验证恢复\n```bash\nsleep 60 && top -b -n 1 | grep -E 'Cpu|java'\ncurl -s 'http://prometheus:9090/api/v1/query?query=cpu_usage_user{ident=\"<host>\"}'\n```\n\n## 4. 根因与后续\n- 用 Arthas/Async-Profiler 抓火焰图找热点方法\n- JVM 频繁 GC 时调整堆大小或换 G1/ZGC\n- 算法改进：缓存计算结果、避免循环嵌套\n- 添加业务指标监控（QPS、慢方法）",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-002",
+    "title": "CPU 系统态/软中断异常（高并发网络 / 中断不均衡）",
+    "category": "cpu_high",
+    "trigger_conditions": "{\"metric\":\"cpu_usage_system\",\"operator\":\">\",\"threshold\":30,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\n# 查看软硬中断分布\ncat /proc/interrupts | head -20\ncat /proc/softirqs\nmpstat -P ALL 1 3\n# 查看网络包速率\nsar -n DEV 1 3\n```\n\n## 2. 应急处置\n```bash\n# 中断不均衡：关闭 irqbalance 后手动绑核\nservice irqbalance stop\n# 设置 RPS/RFS 散列收包\necho ffff > /sys/class/net/eth0/queues/rx-0/rps_cpus\n# 临时降低收包队列\nethtool -G eth0 rx 512\n```\n\n## 3. 验证恢复\n```bash\nmpstat -P ALL 1 5\nsar -n DEV 1 3\n```\n\n## 4. 根因与后续\n- 网卡多队列不均：配置 RSS 哈希策略\n- 软中断爆炸：升级内核 / 用 XDP 卸载\n- 检查是否有 DDoS 攻击、调整 iptables 规则",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-003",
+    "title": "内存使用率告警 + Swap 紧张",
+    "category": "memory_leak",
+    "trigger_conditions": "{\"metric\":\"mem_used_percent\",\"operator\":\">\",\"threshold\":90,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\nfree -h\ncat /proc/meminfo | head -20\n# 找出内存最高的进程\nps aux --sort=-%mem | head -10\n# 查看 Swap 使用\nfor f in /proc/*/status; do awk '/VmSwap|Name/{printf $2 \" \" $3}END{print \"\"}' $f; done | sort -k 2 -n -r | head -10\n```\n\n## 2. 应急处置\n```bash\n# 清理 PageCache（需评估，会影响 IO 性能）\nsync && echo 1 > /proc/sys/vm/drop_caches\n# Java 应用：导出 heap dump 用于事后分析\njmap -dump:format=b,file=/tmp/heap-$(date +%s).bin <PID>\n# 临时增加 Swap（仅紧急情况）\ndd if=/dev/zero of=/swap2 bs=1M count=2048\nmkswap /swap2 && swapon /swap2\n```\n\n## 3. 验证恢复\n```bash\nfree -h\nvmstat 1 5\n```\n\n## 4. 根因与后续\n- Java 应用：用 MAT 分析 dump 找泄漏\n- 确认是否有 Cache 爆炸（Redis/本地缓存）\n- 调整 vm.swappiness（默认 60，可降到 10）\n- 增加监控：JVM heap、本地缓存大小",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-004",
+    "title": "OOM Kill 已触发（紧急）",
+    "category": "oom",
+    "trigger_conditions": "{\"metric\":\"kernel_vmstat_oom_kill\",\"operator\":\">\",\"threshold\":0,\"duration\":\"1m\"}",
+    "steps": "## 1. 确认现状\n```bash\n# 查看最近的 OOM 事件\ndmesg | grep -i 'killed process'\njournalctl -k --since '10 min ago' | grep -i oom\n# 查看被 kill 的进程\ngrep 'Out of memory' /var/log/messages | tail -5\n```\n\n## 2. 应急处置\n```bash\n# 检查关键服务是否还在\nsystemctl status <service>\n# 必要时重启关键服务\nsystemctl restart <service>\n# 调高关键进程的 oom_score_adj（让它不易被 kill）\necho -1000 > /proc/<PID>/oom_score_adj\n```\n\n## 3. 验证恢复\n```bash\nfree -h\nps aux | grep <service>\ncurl -s http://localhost:<port>/health\n```\n\n## 4. 根因与后续\n- 必须做内存容量规划，留 20-30% 空闲\n- 关键应用配 oom_score_adj=-500\n- JVM 启动参数加 -XX:+ExitOnOutOfMemoryError，让 OOM 时进程退出而不是被卡死\n- Linux: cgroup 设置内存上限隔离应用",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-005",
+    "title": "磁盘空间告警",
+    "category": "disk_full",
+    "trigger_conditions": "{\"metric\":\"disk_used_percent\",\"operator\":\">\",\"threshold\":90,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\ndf -h\n# 找出大目录（按目录大小排序）\ndu -h --max-depth=1 / 2>/dev/null | sort -hr | head -10\ndu -h --max-depth=1 /var | sort -hr | head -10\ndu -h --max-depth=1 /opt | sort -hr | head -10\n# 找出大文件\nfind / -type f -size +500M 2>/dev/null | head -20\n```\n\n## 2. 应急处置\n```bash\n# 清理日志（检查后再 rm）\nfind /var/log -name '*.log.*' -mtime +7 -ls\nfind /var/log -name '*.log.*' -mtime +7 -delete\n# 清理 Docker（谨慎，会删除停止的容器和未使用镜像）\ndocker system prune -af\n# 清理 journal\njournalctl --vacuum-time=3d\n# 截断而不删除（避免删除被打开的文件无法释放）\n: > /var/log/big-running-app.log\n```\n\n## 3. 验证恢复\n```bash\ndf -h\n```\n\n## 4. 根因与后续\n- 配置 logrotate 自动轮转\n- 应用日志：使用 size + time 双重轮转\n- 监控告警阈值调整：80% warning，90% critical\n- 评估是否需要扩容磁盘",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-006",
+    "title": "inode 耗尽（磁盘空间够但建不出文件）",
+    "category": "disk_full",
+    "trigger_conditions": "{\"metric\":\"disk_inodes_used_percent\",\"operator\":\">\",\"threshold\":90,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\ndf -i\n# 找出小文件多的目录\nfor d in /var/* /opt/* /tmp/*; do echo \"$d: $(find $d 2>/dev/null | wc -l)\"; done | sort -t: -k2 -nr | head -10\n```\n\n## 2. 应急处置\n```bash\n# 典型场景：session 文件\nfind /var/lib/php/sessions -type f -mtime +1 -delete\n# 邮件队列\nfind /var/spool/postfix -type f -mtime +1 -delete\n# 应用临时文件\nfind /tmp -type f -mtime +1 -delete\n# Docker 层文件\ndocker system prune -af\n```\n\n## 3. 验证恢复\n```bash\ndf -i\n# 测试创建文件\ntouch /tmp/test-inode-$(date +%s) && rm /tmp/test-inode-*\n```\n\n## 4. 根因与后续\n- 应用 bug：循环创建临时文件不清理\n- 文件系统选型：xfs 默认 inode 比 ext4 多\n- 监控：disk_inodes_used_percent 超过 80% 告警",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-007",
+    "title": "磁盘 IO 饱和",
+    "category": "io_saturation",
+    "trigger_conditions": "{\"metric\":\"diskio_io_await\",\"operator\":\">\",\"threshold\":100,\"duration\":\"5m\",\"unit\":\"ms\"}",
+    "steps": "## 1. 确认现状\n```bash\niostat -xz 1 5\niotop -bod 5 -n 3\n# 找出 IO 高的进程\npidstat -d 1 5\n# 查看 page cache 命中率\ncat /proc/meminfo | grep -i cached\n```\n\n## 2. 应急处置\n```bash\n# 限制特定进程的 IO 优先级\nionice -c 3 -p <PID>\n# 调整 IO 调度器（按需选择）\necho mq-deadline > /sys/block/sda/queue/scheduler\n# 清理 page cache（谨慎，会让 IO 变得更糟一段时间）\n# echo 1 > /proc/sys/vm/drop_caches\n# 临时禁用占用 IO 的非关键服务（如备份、日志归档）\nsystemctl stop <backup-job>\n```\n\n## 3. 验证恢复\n```bash\niostat -xz 1 5\n```\n\n## 4. 根因与后续\n- 慢 SQL 导致大量数据扫描：优化索引\n- 日志同步落盘：改异步 / 调大 buffer\n- 评估是否需要更换 SSD / NVMe\n- 应用层：缓存热数据、读写分离",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-008",
+    "title": "网络丢包 / 带宽饱和",
+    "category": "network_issue",
+    "trigger_conditions": "{\"expression\":\"rate(net_drop_in[5m]) + rate(net_drop_out[5m]) > 100\"}",
+    "steps": "## 1. 确认现状\n```bash\nip -s link show eth0\nnetstat -i\nethtool -S eth0 | grep -i drop\n# 查看带宽使用\nsar -n DEV 1 5\nnload eth0\n# 链路质量\nmtr -n -c 100 <peer-ip>\n```\n\n## 2. 应急处置\n```bash\n# 调大网卡 ring buffer\nethtool -G eth0 rx 4096 tx 4096\n# 调大 backlog\nsysctl -w net.core.netdev_max_backlog=30000\nsysctl -w net.core.somaxconn=65535\n# 检查是否有 broadcast/multicast 风暴\ntcpdump -i eth0 -c 1000 -nn 'multicast or broadcast' | wc -l\n```\n\n## 3. 验证恢复\n```bash\nip -s link show eth0\nethtool -S eth0 | grep -i drop\n```\n\n## 4. 根因与后续\n- 联系网络组检查交换机端口错误\n- 评估升级网卡：1G → 10G\n- 应用层做流量整形：限流、降级\n- 监控：drop 增长率而不是绝对值",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-009",
+    "title": "TCP TIME_WAIT 堆积 / 短连接耗尽端口",
+    "category": "connection_pool",
+    "trigger_conditions": "{\"metric\":\"netstat_tcp_tw\",\"operator\":\">\",\"threshold\":30000,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```bash\nss -ant | awk 'NR>1{print $1}' | sort | uniq -c | sort -nr\nnetstat -an | awk '/^tcp/{++S[$NF]}END{for(a in S) print a, S[a]}'\n# 查看时间等待来源\nss -ant | awk '$1==\"TIME-WAIT\"{print $5}' | awk -F: '{print $1}' | sort | uniq -c | sort -nr | head -10\n```\n\n## 2. 应急处置\n```bash\n# 启用 tcp_tw_reuse（客户端安全）\nsysctl -w net.ipv4.tcp_tw_reuse=1\n# 调大本地端口范围\nsysctl -w net.ipv4.ip_local_port_range=\"1024 65535\"\n# 调大 TIME_WAIT 桶\nsysctl -w net.ipv4.tcp_max_tw_buckets=262144\n# 注意：不要开 tcp_tw_recycle（NAT 环境下危险）\n```\n\n## 3. 验证恢复\n```bash\nss -ant | awk '$1==\"TIME-WAIT\"' | wc -l\n```\n\n## 4. 根因与后续\n- 应用使用连接池而不是短连接\n- HTTP 客户端启用 keep-alive\n- 反向代理升级到长连接（nginx 配 keepalive_requests）\n- 监控：tcp_tw / max_tw_buckets 比率",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  },
+  {
+    "id": "rb-010",
+    "title": "MySQL 慢查询 / 连接异常",
+    "category": "slow_sql",
+    "trigger_conditions": "{\"metric\":\"mysql_global_status_slow_queries\",\"operator\":\">\",\"threshold\":50,\"duration\":\"5m\"}",
+    "steps": "## 1. 确认现状\n```sql\n-- 查看当前会话\nSHOW PROCESSLIST;\n-- 慢查询统计\nSHOW GLOBAL STATUS LIKE 'Slow_queries';\nSHOW GLOBAL STATUS LIKE 'Threads_connected';\n-- 找出最慢的 SQL（需开启 performance_schema）\nSELECT * FROM performance_schema.events_statements_summary_by_digest\nORDER BY SUM_TIMER_WAIT DESC LIMIT 10;\n```\n\n## 2. 应急处置\n```sql\n-- 杀掉跑超过 60 秒的 SELECT\nSELECT CONCAT('KILL ', id, ';') FROM information_schema.processlist\nWHERE command='Query' AND time > 60 AND info LIKE 'SELECT%';\n-- 复制结果手动执行 KILL\n\n-- 临时调大连接数\nSET GLOBAL max_connections = 1000;\n```\n\n```bash\n# 分析慢日志\nmysqldumpslow -s t /var/log/mysql/slow.log | head -20\npt-query-digest /var/log/mysql/slow.log | head -100\n```\n\n## 3. 验证恢复\n```sql\nSHOW GLOBAL STATUS LIKE 'Threads_connected';\nSHOW PROCESSLIST;\n```\n\n## 4. 根因与后续\n- 索引缺失：用 EXPLAIN 看执行计划，添加合适索引\n- 锁等待：开启 innodb_print_all_deadlocks\n- 大表分页：用游标代替 OFFSET\n- 业务层加缓存（Redis）减少 DB 压力\n- 监控：慢查询率、innodb_row_lock_time_avg",
+    "auto_executable": false,
+    "dify_document_id": "",
+    "created_at": "2026-04-29T00:00:00Z",
+    "updated_at": "2026-04-29T00:00:00Z"
+  }
+]

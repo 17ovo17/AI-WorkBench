@@ -1,0 +1,65 @@
+openapi: 3.0.0
+info:
+  title: AI WorkBench 巡检报告查询 API
+  description: 供 Dify 工作流调用，获取主机或业务的最近巡检报告。
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: AI WorkBench API（WSL 内部）
+paths:
+  /api/v1/aiops/inspections/{id}/report:
+    get:
+      operationId: get_inspection_report
+      summary: 获取巡检报告详情
+      description: |
+        根据巡检任务 ID 获取结构化巡检报告，
+        包含主机健康度、资源使用、告警事件、AI 分析建议。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 巡检任务 ID
+          example: "1777395678901"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  business_name:
+                    type: string
+                  score:
+                    type: number
+                    description: 健康度评分（0-100）
+                  status:
+                    type: string
+                    enum: [healthy, warning, critical]
+                  hosts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ip:
+                          type: string
+                        hostname:
+                          type: string
+                        score:
+                          type: number
+                        metrics:
+                          type: object
+                  ai_analysis:
+                    type: string
+                    description: AI 分析摘要
+                  generated_at:
+                    type: string
+                    format: date-time
+        "404":
+          description: 巡检报告不存在
+        "500":
+          description: 服务器错误

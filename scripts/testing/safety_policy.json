@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "description": "AI WorkBench exhaustive-test safety policy. Destructive tests must stay inside these scopes.",
+  "windows": {
+    "allowed_hosts": ["192.168.1.7", "127.0.0.1", "localhost"],
+    "allowed_paths": ["C:\\catpaw", "C:\\catpaw-test-sandbox"],
+    "allowed_tasks": ["Catpaw"],
+    "allowed_processes": ["catpaw"]
+  },
+  "linux": {
+    "allowed_hosts": ["wsl", "localhost", "127.0.0.1"],
+    "allowed_paths": ["/usr/local/bin/catpaw", "/etc/catpaw", "/var/log/catpaw", "/var/log/catpaw.log", "/tmp/aiw-danger-sandbox"],
+    "allowed_services": ["catpaw"],
+    "allowed_processes": ["catpaw"]
+  },
+  "mysql": {
+    "allowed_database": "ai_workbench",
+    "temporary_database_prefix": "aiw_test_",
+    "required_test_marker": "test_batch_id"
+  },
+  "redis": {
+    "allowed_key_prefix": "aiw:test:",
+    "preferred_test_db": 15
+  },
+  "forbidden_commands": [
+    "rm -rf /",
+    "rm -rf /*",
+    "del C:\\",
+    "rd /s /q C:\\",
+    "format",
+    "mkfs",
+    "DROP DATABASE ai_workbench",
+    "FLUSHALL",
+    "netsh advfirewall set allprofiles state off",
+    "Set-NetFirewallProfile -Enabled False"
+  ],
+  "danger_patterns": [
+    "rm\\s+-rf",
+    "Remove-Item\\s+.*-Recurse",
+    "del\\s+",
+    "rd\\s+/s",
+    "DROP\\s+DATABASE",
+    "TRUNCATE\\s+TABLE",
+    "FLUSHALL",
+    "format\\s+",
+    "mkfs",
+    "Stop-Process",
+    "pkill",
+    "schtasks\\s+/Delete"
+  ]
+}

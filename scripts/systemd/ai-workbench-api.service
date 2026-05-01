@@ -1,0 +1,16 @@
+[Unit]
+Description=AI WorkBench API Server
+After=network.target mysql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-workbench/api
+ExecStart=/opt/ai-workbench/api/api-linux
+Restart=always
+RestartSec=5
+Environment=AIW_ADMIN_TOKEN=
+StandardOutput=append:/opt/ai-workbench/logs/api.log
+StandardError=append:/opt/ai-workbench/logs/api.log
+
+[Install]
+WantedBy=multi-user.target

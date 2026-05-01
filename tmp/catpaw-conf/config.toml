@@ -1,0 +1,36 @@
+﻿[global]
+interval = "30s"
+
+[global.labels]
+from_hostip = "wsl-local"
+
+[notify.console]
+enabled = true
+
+[notify.webapi]
+enabled = true
+url = "http://127.0.0.1:8080/api/v1/catpaw/report"
+method = "POST"
+
+[notify.heartbeat]
+enabled = true
+url = "http://127.0.0.1:8080/api/v1/catpaw/heartbeat"
+interval = "60s"
+
+[ai]
+enabled = true
+model_priority = []
+max_rounds = 6
+request_timeout = "120s"
+max_retries = 1
+retry_backoff = "2s"
+tool_timeout = "20s"
+queue_full_policy = "wait"
+language = "zh"
+
+[ai.gateway]
+enabled = true
+base_url = "http://127.0.0.1:8080/api/v1/agent/llm"
+max_retries = 1
+request_timeout = "120s"
+fallback_to_direct = false

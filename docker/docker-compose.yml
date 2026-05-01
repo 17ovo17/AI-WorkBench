@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  # 模拟 categraf 指标的测试节点（用 node_exporter 代替）
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"

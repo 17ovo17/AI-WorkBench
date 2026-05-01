@@ -1,0 +1,88 @@
+workflow:
+  name: security_compliance
+  description: 安全合规 — 审计事件 + 风险评分 + LLM 深度分析
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收安全审计请求
+      inputs:
+        time_range: "24h"
+        audit_type: "security"
+        min_risk: "low"
+        domains: ""
+      next: http_audit_events
+    - id: http_audit_events
+      type: http_request
+      title: 获取审计事件
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/events"
+        timeout: 15000
+      fallback: {on_error: continue, fallback_value: '{"events":[]}'}
+      next: code_risk_score
+    - id: code_risk_score
+      type: code
+      title: 风险评分计算
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var events = inputs.events || [];
+          var dist = {high:0, medium:0, low:0};
+          var topRisks = [];
+          var severityMap = {critical:3, high:3, warning:2, medium:2, info:1, low:1};
+          for (var i = 0; i < events.length; i++) {
+            var e = events[i];
+            var sev = (e.severity || e.level || 'low').toLowerCase();
+            var score = severityMap[sev] || 1;
+            if (score >= 3) { dist.high++; topRisks.push({event:e.action||e.type||'unknown',severity:'high',time:e.timestamp||'',detail:e.message||''}); }
+            else if (score >= 2) dist.medium++;
+            else dist.low++;
+          }
+          topRisks.sort(function(a,b){return (b.time||'').localeCompare(a.time||'');});
+          var overall = dist.high > 5 ? 'critical' : dist.high > 0 ? 'high' : dist.medium > 10 ? 'medium' : 'low';
+          outputs = {total_events:events.length, risk_distribution:dist, top_risks:topRisks.slice(0,10), overall_risk_level:overall};
+      inputs:
+        events: "{{http_audit_events.response.events}}"
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索安全知识
+      config:
+        query: "{{start.audit_type}} 安全审计 合规检查"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: llm_security_analysis
+    - id: llm_security_analysis
+      type: llm
+      title: LLM 安全分析
+      config:
+        system_prompt: |
+          你是信息安全专家，擅长审计事件分析和合规评估。
+          根据审计类型切换关注点：security→未授权访问/权限变更/异常登录；ssl→证书过期/弱加密/TLS版本；config→配置漂移/未授权变更/合规偏差。
+          输出 JSON：{"audit_type":"","summary":"","risk_level":"critical/high/medium/low","findings":[{"category":"","description":"","severity":"","evidence":"","recommendation":""}],"compliance_gaps":[],"action_items":[]}
+        user_prompt: |
+          类型: {{start.audit_type}} | 范围: {{start.time_range}} | 最低风险: {{start.min_risk}}
+          总事件: {{code_risk_score.total_events}} | 风险等级: {{code_risk_score.overall_risk_level}}
+          风险分布: {{code_risk_score.risk_distribution}}
+          高风险Top10: {{code_risk_score.top_risks}}
+          参考: {{knowledge_retrieval.results}}
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: end
+    - id: end
+      type: end
+      title: 输出安全报告
+      outputs:
+        report: "{{llm_security_analysis.result}}"
+        risk_level: "{{code_risk_score.overall_risk_level}}"
+        risk_distribution: "{{code_risk_score.risk_distribution}}"
+        total_events: "{{code_risk_score.total_events}}"
+        metadata: {audit_type: "{{start.audit_type}}", time_range: "{{start.time_range}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    retry: {max_attempts: 1, backoff: 2000}

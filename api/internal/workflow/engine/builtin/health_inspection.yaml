@@ -1,0 +1,119 @@
+workflow:
+  name: health_inspection
+  description: 健康巡检 — 多维度并行探活 + 聚合评估 + LLM 综合报告
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收巡检请求
+      inputs:
+        hostname: ""
+        business_id: ""
+        scope: "full"
+      next: http_metrics
+    - id: http_metrics
+      type: http_request
+      title: 获取主机指标
+      parallel_group: probe_group
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 15000
+      fallback: {on_error: continue, fallback_value: '{"metrics":{}}'}
+      next: code_health_score
+    - id: http_datasources
+      type: http_request
+      title: 探测数据源健康
+      parallel_group: probe_group
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/datasources"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"datasources":[]}'}
+      next: code_health_score
+    - id: http_storage
+      type: http_request
+      title: 探测存储健康
+      parallel_group: probe_group
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/storage"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"status":"unknown"}'}
+      next: code_health_score
+    - id: code_health_score
+      type: code
+      title: 健康评分计算
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var metrics = inputs.metrics || {};
+          var ds = inputs.datasources || [];
+          var storage = inputs.storage || {};
+          var dims = {};
+          var sc = function(v, w, c) { if (v >= c) return 0; if (v >= w) return 60; return 100; };
+          dims.cpu = sc(parseFloat(metrics.cpu_usage_active)||0, 70, 90);
+          dims.memory = sc(parseFloat(metrics.mem_used_percent)||0, 80, 95);
+          dims.disk = sc(parseFloat(metrics.disk_used_percent)||0, 80, 90);
+          dims.network = (parseFloat(metrics.net_drop_in)||0) > 100 || (parseFloat(metrics.net_drop_out)||0) > 100 ? 60 : 100;
+          dims.db = 100; dims.redis = 100;
+          if (Array.isArray(ds)) { for (var i = 0; i < ds.length; i++) { if (ds[i].type==='mysql' && ds[i].status!=='ok') dims.db=0; if (ds[i].type==='redis' && ds[i].status!=='ok') dims.redis=0; } }
+          dims.storage = (storage.status==='ok'||storage.status==='healthy') ? 100 : storage.status==='degraded' ? 60 : 30;
+          var vals = [dims.cpu,dims.memory,dims.disk,dims.network,dims.db,dims.redis,dims.storage];
+          var sum = 0; for (var j = 0; j < vals.length; j++) sum += vals[j];
+          var overall = Math.round(sum / vals.length);
+          var risks = []; var dk = Object.keys(dims);
+          for (var k = 0; k < dk.length; k++) { if (dims[dk[k]] < 60) risks.push(dk[k]); }
+          var status = overall >= 80 ? 'healthy' : overall >= 50 ? 'degraded' : 'critical';
+          outputs = {overall_score:overall, dimensions:dims, risks:risks, status:status};
+      inputs:
+        metrics: "{{http_metrics.response}}"
+        datasources: "{{http_datasources.response.datasources}}"
+        storage: "{{http_storage.response}}"
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索巡检知识
+      config:
+        query: "健康巡检 {{start.hostname}} {{start.scope}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: llm_health_report
+    - id: llm_health_report
+      type: llm
+      title: LLM 健康报告
+      config:
+        system_prompt: |
+          你是运维巡检专家，基于多维度健康评分生成综合巡检报告。
+          请输出结构化 Markdown 报告，不要输出 JSON。
+          报告必须包含：
+          1. 巡检摘要表：主机、业务、范围、综合分、整体状态、结论。
+          2. 每台主机或当前主机的指标表格：CPU、内存、磁盘、网络、数据库、Redis、存储、状态、证据。
+          3. 异常汇总表：维度、异常项、当前分值或指标、严重级别、依据。
+          4. 处置建议：立即处理项、观察项、长期优化项。
+          必须基于输入中的真实 Prometheus/健康探测数据；缺失数据写“数据缺失”，不得补造。
+        user_prompt: |
+          主机: {{start.hostname}} | 业务: {{start.business_id}} | 范围: {{start.scope}}
+          综合分: {{code_health_score.overall_score}} | 状态: {{code_health_score.status}}
+          各维度: {{code_health_score.dimensions}}
+          风险项: {{code_health_score.risks}}
+          参考: {{knowledge_retrieval.results}}
+        temperature: 0.05
+        max_tokens: 2000
+        json_mode: false
+      next: end
+    - id: end
+      type: end
+      title: 输出巡检报告
+      outputs:
+        report: "{{llm_health_report.result}}"
+        score: "{{code_health_score.overall_score}}"
+        status: "{{code_health_score.status}}"
+        dimensions: "{{code_health_score.dimensions}}"
+        metadata: {hostname: "{{start.hostname}}", scope: "{{start.scope}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    retry: {max_attempts: 1, backoff: 2000}

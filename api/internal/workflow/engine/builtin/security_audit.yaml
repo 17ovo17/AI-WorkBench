@@ -1,0 +1,122 @@
+workflow:
+  name: security_audit
+  description: 安全审计工作流 — 获取审计事件 → 风险评分 → 条件分流 → LLM 深度分析
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收安全审计请求
+      inputs:
+        time_range: "24h"
+        min_risk: "medium"
+      next: http_audit_events
+
+    - id: http_audit_events
+      type: http_request
+      title: 获取审计事件
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/events?range={{start.time_range}}&limit=100"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"events":[]}'
+      next: code_risk_score
+
+    - id: code_risk_score
+      type: code
+      title: 计算风险评分
+      config:
+        language: javascript
+        code: |
+          function main(inputs) {
+            var data = inputs.http_audit_events_response || '{"events":[]}';
+            var parsed = typeof data === 'string' ? JSON.parse(data) : data;
+            var events = parsed.events || [];
+            var WEIGHTS = { delete: 10, permission_change: 8, config_modify: 5, login_fail: 3, access: 1 };
+            var score = 0;
+            var highRisk = [];
+            for (var i = 0; i < events.length; i++) {
+              var e = events[i];
+              var action = (e.action || '').toLowerCase();
+              var w = WEIGHTS[action] || 1;
+              score += w;
+              if (w >= 5) highRisk.push(e);
+            }
+            return { risk_score: score, total_events: events.length, high_risk_events: highRisk.slice(0, 20), high_risk_count: highRisk.length };
+          }
+      fallback:
+        on_error: continue
+        fallback_value: '{"risk_score":0,"total_events":0,"high_risk_events":[],"high_risk_count":0}'
+      next: condition
+
+    - id: condition
+      type: condition
+      title: 风险等级判断
+      conditions:
+        - id: high_risk
+          logic: and
+          rules:
+            - variable: "{{code_risk_score.risk_score}}"
+              operator: greater_than
+              value: 50
+          next: llm_deep_analysis
+        - id: low_risk
+          logic: default
+          next: end_safe
+
+    - id: llm_deep_analysis
+      type: llm
+      title: LLM 深度分析
+      config:
+        system_prompt: |
+          你是资深安全工程师，擅长安全审计和风险评估。
+          请深度分析高风险审计事件，识别潜在安全威胁。
+          输出 JSON 格式：
+          {"threat_level":"critical/high/medium","threats":[{"event":"事件","risk":"风险","mitigation":"缓解措施"}],"timeline":"攻击时间线描述","recommendations":["建议1"],"summary":"一句话总结"}
+        user_prompt: |
+          ## 审计请求
+          时间范围: {{start.time_range}}
+          最低风险等级: {{start.min_risk}}
+
+          ## 风险评分
+          总分: {{code_risk_score.risk_score}}
+          总事件数: {{code_risk_score.total_events}}
+          高风险事件数: {{code_risk_score.high_risk_count}}
+
+          ## 高风险事件详情
+          {{code_risk_score.high_risk_events}}
+
+          请基于以上数据进行深度安全分析，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"threat_level":"unknown","threats":[],"recommendations":[],"summary":"LLM 分析不可用"}'
+      next: end_risk
+
+    - id: end_risk
+      type: end
+      title: 输出风险报告
+      outputs:
+        report: "{{llm_deep_analysis.result}}"
+        risk_score: "{{code_risk_score.risk_score}}"
+        risk_level: "high"
+
+    - id: end_safe
+      type: end
+      title: 输出安全报告
+      outputs:
+        report: '{"status":"safe","summary":"未发现高风险操作"}'
+        risk_score: "{{code_risk_score.risk_score}}"
+        risk_level: "low"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

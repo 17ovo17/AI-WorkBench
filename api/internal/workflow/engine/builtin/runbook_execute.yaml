@@ -1,0 +1,150 @@
+workflow:
+  name: runbook_execute
+  description: Runbook 安全执行工作流 — 获取 Runbook → 命令安全验证 → 条件执行 → 保存结果
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收执行请求
+      inputs:
+        runbook_id: ""
+        target_ip: ""
+        dry_run: "false"
+      next: http_runbook_detail
+
+    - id: http_runbook_detail
+      type: http_request
+      title: 获取 Runbook 详情
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/knowledge/runbooks/{{start.runbook_id}}"
+        timeout: 5000
+      next: code_validate
+
+    - id: code_validate
+      type: code
+      title: 命令安全验证
+      config:
+        language: javascript
+        timeout: 5000
+        code: |
+          var steps = inputs.steps || '';
+          var DANGEROUS = [
+            'rm -rf /', 'rm -rf /*', 'dd if=/dev/zero', 'dd if=/dev/random',
+            'mkfs.', ':(){:|:&};:', 'chmod -R 777 /', '> /dev/sda',
+            'kill -9 1', 'shutdown -h', 'reboot', 'init 0', 'init 6',
+            'DROP DATABASE', 'DROP TABLE', 'TRUNCATE TABLE', 'DELETE FROM',
+            'format c:', 'del /f /s /q', 'iptables -F', 'iptables -X',
+            'systemctl stop firewalld', 'ufw disable',
+            'passwd root', 'userdel', 'groupdel',
+            'wget -O- | sh', 'curl | sh', 'curl | bash'
+          ];
+          var SAFE_PREFIXES = [
+            'top -bn1', 'ps aux', 'ps -ef', 'df -h', 'free -m', 'free -g',
+            'iostat', 'vmstat', 'mpstat', 'sar', 'netstat -', 'ss -',
+            'cat /proc/', 'cat /etc/', 'head ', 'tail ',
+            'systemctl status', 'systemctl is-active',
+            'journalctl -u', 'journalctl --since',
+            'mysql -e "SELECT', 'mysql -e "SHOW',
+            'redis-cli info', 'redis-cli dbsize',
+            'docker ps', 'docker stats', 'docker logs',
+            'kubectl get', 'kubectl describe', 'kubectl logs',
+            'uptime', 'hostname', 'uname -a', 'whoami', 'id',
+            'lsof -i', 'lsblk', 'fdisk -l', 'mount',
+            'ip addr', 'ip route', 'ping -c', 'traceroute',
+            'dig ', 'nslookup ', 'curl -s http://localhost'
+          ];
+          var lines = steps.split('\n');
+          var results = [];
+          var allSafe = true;
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line || line.indexOf('#') === 0) continue;
+            var cmdMatch = line.match(/`([^`]+)`/);
+            if (!cmdMatch) continue;
+            var cmd = cmdMatch[1].trim();
+            var isDangerous = false;
+            for (var d = 0; d < DANGEROUS.length; d++) {
+              if (cmd.toLowerCase().indexOf(DANGEROUS[d].toLowerCase()) >= 0) {
+                isDangerous = true;
+                break;
+              }
+            }
+            var isSafe = false;
+            for (var s = 0; s < SAFE_PREFIXES.length; s++) {
+              if (cmd.indexOf(SAFE_PREFIXES[s]) === 0) {
+                isSafe = true;
+                break;
+              }
+            }
+            var status = isDangerous ? 'dangerous' : (isSafe ? 'safe' : 'unknown');
+            if (status !== 'safe') allSafe = false;
+            results.push({command: cmd, status: status, line: i + 1});
+          }
+          outputs = {commands: results, all_safe: allSafe, total: results.length};
+      inputs:
+        steps: "{{http_runbook_detail.steps}}"
+      next: condition_exec
+
+    - id: condition_exec
+      type: condition
+      title: 判断是否可自动执行
+      conditions:
+        - id: can_auto_execute
+          logic: and
+          rules:
+            - variable: "{{code_validate.all_safe}}"
+              operator: equals
+              value: "true"
+            - variable: "{{http_runbook_detail.auto_executable}}"
+              operator: equals
+              value: "true"
+            - variable: "{{start.dry_run}}"
+              operator: equals
+              value: "false"
+          next: agent_execute
+        - id: manual_required
+          logic: default
+          next: end_manual
+
+    - id: agent_execute
+      type: agent
+      title: 安全执行命令
+      config:
+        system_prompt: |
+          你是运维自动化执行器。请按照 Runbook 步骤，在目标主机上执行安全命令。
+          每执行一步，先用 query_prometheus 检查当前状态，再决定是否继续。
+          如果发现异常加剧，立即停止并报告。
+          目标主机: {{start.target_ip}}
+        tools:
+          - query_prometheus
+          - search_knowledge
+        max_iterations: 10
+      next: end_executed
+
+    - id: end_manual
+      type: end
+      title: 需人工确认
+      outputs:
+        action: manual_required
+        reason: "命令安全验证未通过或 Runbook 未标记为可自动执行"
+        validation: "{{code_validate.commands}}"
+        runbook_id: "{{start.runbook_id}}"
+
+    - id: end_executed
+      type: end
+      title: 执行完成
+      outputs:
+        action: executed
+        result: "{{agent_execute.result}}"
+        runbook_id: "{{start.runbook_id}}"
+        target_ip: "{{start.target_ip}}"
+
+  global:
+    error_handling: stop_on_failure
+    timeout: 300000
+    node_timeout: 60000
+    retry:
+      max_attempts: 1
+      backoff: 2000

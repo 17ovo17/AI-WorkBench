@@ -1,0 +1,34 @@
+ai:
+    api_key: ""
+    base_url: ""
+    default_model: "gpt-4o"
+    diagnose_model: "gpt-4o"
+
+mysql:
+    dsn: "root:password@tcp(127.0.0.1:3306)/ai_workbench?charset=utf8mb4&parseTime=true&loc=Local"
+
+redis:
+    addr: "127.0.0.1:6379"
+
+server:
+    host: "0.0.0.0"
+    port: "8080"
+    allowed_origins:
+        - "*"
+
+prometheus:
+    instance_format: '{ip}:9100'
+
+embedding:
+    provider: "builtin"
+    api:
+        url: ""
+        key: ""
+        model: "text-embedding-v3"
+        dimensions: 1024
+        batch_size: 20
+
+reranker:
+    enabled: false
+    provider: "llm"
+    top_k: 5

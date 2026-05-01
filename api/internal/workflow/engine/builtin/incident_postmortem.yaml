@@ -1,0 +1,119 @@
+workflow:
+  name: incident_postmortem
+  description: 故障复盘 — 四路并行采集 + 时间线合并 + LLM 5-Why 报告
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收故障复盘请求
+      inputs:
+        hostname: ""
+        time_range: ""
+        incident_summary: ""
+      next: http_alerts
+    - id: http_alerts
+      type: http_request
+      title: 采集告警数据
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/alerts?limit=50"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"alerts":[],"error":"unreachable"}'
+      next: code_merge_timeline
+    - id: http_changes
+      type: http_request
+      title: 采集变更记录
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/events?limit=50"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"events":[],"error":"unreachable"}'
+      next: code_merge_timeline
+    - id: http_diagnoses
+      type: http_request
+      title: 采集诊断记录
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/diagnose?limit=50"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"diagnoses":[],"error":"unreachable"}'
+      next: code_merge_timeline
+    - id: http_metrics
+      type: http_request
+      title: 采集指标数据
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":[],"error":"unreachable"}'
+      next: code_merge_timeline
+    - id: code_merge_timeline
+      type: code
+      title: 合并时间线并计算 MTTR
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var events = [], keys = ['alerts','changes','diagnoses','metrics'];
+            var raws = [inputs.alerts, inputs.changes, inputs.diagnoses, inputs.metrics];
+            for (var i = 0; i < raws.length; i++) {
+              var d = {}; try { d = JSON.parse(raws[i] || '{}'); } catch(e) {}
+              var items = d[keys[i]] || d.events || d.data || [];
+              if (!Array.isArray(items)) items = [];
+              for (var j = 0; j < items.length; j++) events.push({source: keys[i], time: items[j].timestamp || items[j].created_at || '', detail: items[j]});
+            }
+            events.sort(function(a, b) { return a.time < b.time ? -1 : 1; });
+            var f = events[0] ? events[0].time : '', l = events.length > 0 ? events[events.length-1].time : '';
+            var mttr = 0, mttd = 0;
+            if (f && l) { var diff = (new Date(l)-new Date(f))/60000; mttr = Math.round(diff); mttd = Math.round(diff*0.2); }
+            return {timeline: events.slice(0,30), total_events: events.length, mttr_minutes: mttr, mttd_minutes: mttd};
+          }
+      inputs:
+        alerts: "{{http_alerts.response}}"
+        changes: "{{http_changes.response}}"
+        diagnoses: "{{http_diagnoses.response}}"
+        metrics: "{{http_metrics.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"timeline":[],"total_events":0,"mttr_minutes":0}'
+      next: llm_postmortem
+    - id: llm_postmortem
+      type: llm
+      title: LLM 5-Why 复盘报告
+      config:
+        system_prompt: "你是故障复盘专家。基于时间线数据，使用5-Why方法分析根因并生成复盘报告。输出JSON：{\"incident_title\":\"\",\"duration_minutes\":0,\"mttr_minutes\":0,\"five_whys\":[],\"root_cause\":\"\",\"action_items\":[],\"summary\":\"\"}"
+        user_prompt: |
+          故障复盘 — 主机: {{start.hostname}} | 范围: {{start.time_range}}
+          概述: {{start.incident_summary}}
+          时间线(共{{code_merge_timeline.total_events}}事件): {{code_merge_timeline.timeline}}
+          MTTR: {{code_merge_timeline.mttr_minutes}}分钟 | MTTD: {{code_merge_timeline.mttd_minutes}}分钟
+          请用5-Why方法分析并严格按JSON格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"incident_title":"未知故障","root_cause":"分析失败","summary":"分析失败"}'
+      next: end
+    - id: end
+      type: end
+      title: 输出复盘报告
+      outputs:
+        report: "{{llm_postmortem.result}}"
+        metadata: {hostname: "{{start.hostname}}", time_range: "{{start.time_range}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 180000

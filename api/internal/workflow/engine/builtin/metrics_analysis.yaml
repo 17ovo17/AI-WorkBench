@@ -1,0 +1,116 @@
+workflow:
+  name: metrics_analysis
+  description: Prometheus 深度指标分析 — 获取指标列表 → 批量查询 → JS 异常检测 → LLM 解读
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收分析请求
+      inputs:
+        hostname: ""
+        time_range: "6h"
+        focus_area: ""
+      next: http_label_values
+
+    - id: http_label_values
+      type: http_request
+      title: 获取主机列表
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/hosts"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"hosts":[]}'
+      next: http_batch_query
+
+    - id: http_batch_query
+      type: http_request
+      title: 批量查询时序数据
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 30000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":{}}'
+      next: code_anomaly_detect
+
+    - id: code_anomaly_detect
+      type: code
+      title: 异常检测（3-sigma + 环比突变）
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var metrics = inputs.metrics || {};
+          var anomalies = [];
+          var keys = Object.keys(metrics);
+          for (var i = 0; i < keys.length; i++) {
+            var name = keys[i];
+            var val = parseFloat(metrics[name]);
+            if (isNaN(val)) continue;
+            var thresholds = {
+              'cpu_usage_active': {warn: 70, crit: 90},
+              'mem_used_percent': {warn: 80, crit: 95},
+              'disk_used_percent': {warn: 80, crit: 90},
+              'disk_io_util': {warn: 70, crit: 90},
+              'net_drop_in': {warn: 100, crit: 1000},
+              'net_drop_out': {warn: 100, crit: 1000},
+              'tcp_time_wait': {warn: 5000, crit: 20000},
+              'load1_per_cpu': {warn: 0.7, crit: 1.0}
+            };
+            var t = thresholds[name];
+            if (!t) continue;
+            var status = 'normal';
+            if (val >= t.crit) status = 'critical';
+            else if (val >= t.warn) status = 'warning';
+            if (status !== 'normal') {
+              anomalies.push({metric: name, value: val, threshold_warn: t.warn, threshold_crit: t.crit, status: status});
+            }
+          }
+          outputs = {anomalies: anomalies, total_checked: keys.length, anomaly_count: anomalies.length};
+      inputs:
+        metrics: "{{http_batch_query.response}}"
+      next: llm_interpret
+
+    - id: llm_interpret
+      type: llm
+      title: LLM 异常解读
+      config:
+        system_prompt: |
+          你是资深运维工程师，请解读以下指标异常检测结果。
+          分析异常指标之间的关联性，判断是否存在级联故障。
+          输出 JSON：{"summary":"总结","anomaly_analysis":[{"metric":"指标名","value":"当前值","interpretation":"业务含义","risk_level":"high/medium/low","action":"建议操作"}],"correlation":"关联性分析","overall_risk":"high/medium/low"}
+        user_prompt: |
+          ## 主机: {{start.hostname}}
+          ## 关注领域: {{start.focus_area}}
+
+          ## 异常检测结果
+          {{code_anomaly_detect.anomalies}}
+
+          ## 全量指标数据
+          {{http_batch_query.response}}
+
+          ## 可用指标列表
+          {{http_label_values.response}}
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: end
+
+    - id: end
+      type: end
+      title: 输出分析报告
+      outputs:
+        analysis: "{{llm_interpret.result}}"
+        anomalies: "{{code_anomaly_detect.anomalies}}"
+        hostname: "{{start.hostname}}"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    retry:
+      max_attempts: 1
+      backoff: 2000

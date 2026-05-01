@@ -1,0 +1,182 @@
+workflow:
+  name: ssl_audit
+  description: SSL 证书审计工作流 — 域名列表加载 + 循环检查每个证书 + 汇总统计 + LLM 报告
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收 SSL 审计请求
+      inputs:
+        domains: []
+      next: http_endpoint_list
+
+    - id: http_endpoint_list
+      type: http_request
+      title: 加载/扩展域名列表
+      config:
+        method: POST
+        url: "http://127.0.0.1:8080/api/v1/aiops/ssl/endpoints/expand"
+        headers:
+          Content-Type: application/json
+        body:
+          domains: "{{start.domains}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"endpoints":[]}'
+      next: loop_check
+
+    - id: loop_check
+      type: loop
+      title: 循环检查每个证书
+      config:
+        items_variable: "http_endpoint_list.endpoints"
+        max_iterations: 200
+        action:
+          type: http_request
+          config:
+            method: POST
+            url: "http://127.0.0.1:8080/api/v1/aiops/ssl/check"
+            headers:
+              Content-Type: application/json
+            body:
+              domain: "{{loop.item}}"
+              port: 443
+            timeout: 10000
+          fallback:
+            on_error: continue
+            fallback_value: '{"domain":"","ok":false,"error":"check_failed"}'
+      fallback:
+        on_error: continue
+        fallback_value: '{"results":[],"count":0}'
+      next: code_summary
+
+    - id: code_summary
+      type: code
+      title: 汇总证书状态
+      config:
+        language: javascript
+        timeout: 5000
+        code: |
+          function main(inputs) {
+            var rawList = inputs.loop_results;
+            var list = [];
+            if (typeof rawList === 'string') {
+              try { list = JSON.parse(rawList); } catch (e) { list = []; }
+            } else if (Array.isArray(rawList)) {
+              list = rawList;
+            }
+
+            var expired = [];
+            var expiring7d = [];
+            var expiring30d = [];
+            var healthy = [];
+            var failed = [];
+            var now = Math.floor(Date.now() / 1000);
+
+            for (var i = 0; i < list.length; i++) {
+              var raw = list[i];
+              var item = (typeof raw === 'string') ? (function() { try { return JSON.parse(raw); } catch (e) { return {}; } })() : raw;
+              if (!item || item.ok === false) {
+                failed.push({ domain: (item && item.domain) || 'unknown', error: (item && item.error) || 'unknown' });
+                continue;
+              }
+              var notAfter = parseInt(item.not_after_timestamp || 0, 10);
+              if (!notAfter) {
+                failed.push({ domain: item.domain, error: 'no_expiry_info' });
+                continue;
+              }
+              var daysLeft = Math.floor((notAfter - now) / 86400);
+              var entry = { domain: item.domain, days_left: daysLeft, issuer: item.issuer || '', not_after: item.not_after || '' };
+              if (daysLeft < 0) expired.push(entry);
+              else if (daysLeft <= 7) expiring7d.push(entry);
+              else if (daysLeft <= 30) expiring30d.push(entry);
+              else healthy.push(entry);
+            }
+
+            return {
+              total: list.length,
+              expired_count: expired.length,
+              expiring_7d_count: expiring7d.length,
+              expiring_30d_count: expiring30d.length,
+              healthy_count: healthy.length,
+              failed_count: failed.length,
+              expired: expired,
+              expiring_7d: expiring7d,
+              expiring_30d: expiring30d,
+              failed: failed
+            };
+          }
+      inputs:
+        loop_results: "{{loop_check.results}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"total":0,"expired_count":0}'
+      next: llm_report
+
+    - id: llm_report
+      type: llm
+      title: LLM 审计报告
+      config:
+        system_prompt: |
+          你是 SSL 证书审计专家。基于审计统计，输出执行摘要、风险评级和续签优先级。
+          输出 JSON：{"executive_summary":"摘要","risk_level":"HIGH|MEDIUM|LOW","priority_actions":[{"domain":"","action":"立即续签|7日内续签|30日内安排","priority":1}],"recommendations":["建议1","建议2"]}
+        user_prompt: |
+          ## SSL 证书审计报告
+
+          ## 统计
+          总数: {{code_summary.total}}
+          已过期: {{code_summary.expired_count}}
+          7 天内过期: {{code_summary.expiring_7d_count}}
+          30 天内过期: {{code_summary.expiring_30d_count}}
+          健康: {{code_summary.healthy_count}}
+          检查失败: {{code_summary.failed_count}}
+
+          ## 已过期证书
+          {{code_summary.expired}}
+
+          ## 7 天内过期
+          {{code_summary.expiring_7d}}
+
+          ## 30 天内过期
+          {{code_summary.expiring_30d}}
+
+          ## 检查失败
+          {{code_summary.failed}}
+
+          请生成审计报告，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"executive_summary":"分析失败","risk_level":"LOW","priority_actions":[]}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出审计报告
+      outputs:
+        report: "{{llm_report.result}}"
+        summary:
+          total: "{{code_summary.total}}"
+          expired: "{{code_summary.expired_count}}"
+          expiring_7d: "{{code_summary.expiring_7d_count}}"
+          expiring_30d: "{{code_summary.expiring_30d_count}}"
+          healthy: "{{code_summary.healthy_count}}"
+          failed: "{{code_summary.failed_count}}"
+        details:
+          expired_list: "{{code_summary.expired}}"
+          expiring_7d_list: "{{code_summary.expiring_7d}}"
+          failed_list: "{{code_summary.failed}}"
+        metadata:
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 600000
+    node_timeout: 60000
+    retry:
+      max_attempts: 1
+      backoff: 2000

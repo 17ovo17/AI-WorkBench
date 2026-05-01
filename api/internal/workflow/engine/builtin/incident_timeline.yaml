@@ -1,0 +1,136 @@
+workflow:
+  name: incident_timeline
+  description: 故障时间线重建工作流 — 并行采集告警/诊断/审计 → 合并时间线 → LLM 叙事报告
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收时间线重建请求
+      inputs:
+        hostname: ""
+        time_range: "6h"
+      next: http_alerts
+
+    - id: http_alerts
+      type: http_request
+      title: 获取告警记录
+      parallel_group: timeline_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/alerts?ip={{start.hostname}}&range={{start.time_range}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"items":[]}'
+      next: code_merge_timeline
+
+    - id: http_diagnoses
+      type: http_request
+      title: 获取诊断记录
+      parallel_group: timeline_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/diagnose?ip={{start.hostname}}&range={{start.time_range}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"items":[]}'
+      next: code_merge_timeline
+
+    - id: http_audit
+      type: http_request
+      title: 获取审计事件
+      parallel_group: timeline_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/events?range={{start.time_range}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"events":[]}'
+      next: code_merge_timeline
+
+    - id: code_merge_timeline
+      type: code
+      title: 合并时间线
+      config:
+        language: javascript
+        code: |
+          function main(inputs) {
+            var alerts = JSON.parse(inputs.http_alerts_response || '{"items":[]}');
+            var diags = JSON.parse(inputs.http_diagnoses_response || '{"items":[]}');
+            var audit = JSON.parse(inputs.http_audit_response || '{"events":[]}');
+            var timeline = [];
+            var aItems = alerts.items || [];
+            for (var i = 0; i < aItems.length; i++) {
+              timeline.push({ time: aItems[i].fired_at, type: 'alert', detail: aItems[i] });
+            }
+            var dItems = diags.items || [];
+            for (var j = 0; j < dItems.length; j++) {
+              timeline.push({ time: dItems[j].created_at, type: 'diagnosis', detail: dItems[j] });
+            }
+            var events = audit.events || [];
+            for (var k = 0; k < events.length; k++) {
+              timeline.push({ time: events[k].timestamp, type: 'audit', detail: events[k] });
+            }
+            timeline.sort(function(a, b) { return (a.time || '').localeCompare(b.time || ''); });
+            return {
+              total_events: timeline.length,
+              alerts_count: aItems.length,
+              diagnoses_count: dItems.length,
+              audit_count: events.length,
+              timeline: timeline.slice(0, 50)
+            };
+          }
+      fallback:
+        on_error: continue
+        fallback_value: '{"total_events":0,"timeline":[]}'
+      next: llm_narrative
+
+    - id: llm_narrative
+      type: llm
+      title: LLM 故障叙事
+      config:
+        system_prompt: |
+          你是资深 SRE 工程师，擅长故障复盘和时间线分析。
+          请基于合并后的时间线，生成故障叙事报告。
+          输出 JSON 格式：
+          {"incident_summary":"故障概述","timeline_narrative":[{"time":"时间","event":"事件","impact":"影响"}],"root_cause":"根因分析","causal_chain":"因果链描述","lessons_learned":["经验教训"],"recommendations":["改进建议"]}
+        user_prompt: |
+          ## 故障时间线重建
+          主机: {{start.hostname}}
+          时间范围: {{start.time_range}}
+
+          ## 数据源统计
+          告警: {{code_merge_timeline.alerts_count}} 条
+          诊断: {{code_merge_timeline.diagnoses_count}} 条
+          审计: {{code_merge_timeline.audit_count}} 条
+
+          ## 合并时间线
+          {{code_merge_timeline.timeline}}
+
+          请基于以上时间线生成故障叙事报告，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 3000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"incident_summary":"分析失败","timeline_narrative":[],"root_cause":"未知","recommendations":[]}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出时间线报告
+      outputs:
+        report: "{{llm_narrative.result}}"
+        hostname: "{{start.hostname}}"
+        total_events: "{{code_merge_timeline.total_events}}"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 180000
+    node_timeout: 60000
+    retry:
+      max_attempts: 1
+      backoff: 2000

@@ -1,0 +1,89 @@
+# Go binary & build
+api/ai-workbench-api
+api/ai-workbench-api.exe
+api/data/
+*.exe
+*.dll
+*.so
+
+# Node
+web/node_modules/
+web/dist/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test evidence
+.test-evidence/
+
+# Secrets & config with credentials
+.env
+*.pem
+*.key
+
+# Temp files
+*.tmp
+*.bak
+
+# Screenshots (testing artifacts in root)
+/*.png
+/*.jpeg
+
+# Claude working files (temp artifacts)
+.claude/__pycache__/
+.claude/qa-*.json
+.claude/qa-*.md
+.claude/qa_*.py
+.claude/tmp-*
+.claude/smoke-*
+.claude/*.sh
+.claude/api-routes-runtime.json
+.claude/diagnostic-route-check-results.json
+.claude/coding-progress.json
+
+# Prometheus data
+prometheus-data/
+
+# Build cache
+api/vendor/
+
+# Runtime data
+api/assets/*.db
+nohup.out
+
+# Playwright MCP cache
+.playwright-mcp/
+
+# Claude context files (temp, regenerable)
+.claude/context-*.json
+.claude/aiops-curl-*
+.claude/verify-fixes.js
+
+# Codex duplicate (already in .claude/agents/)
+.codex/
+
+# Temp markdown files in root
+FAKE-APP-METRICS-GUIDE.md
+FINAL-TEST-REPORT.md
+INSPECTION-OPTIMIZATION-DONE.md
+ai-config-after-key-overwrite-check.md
+
+# Stale binaries and temp files
+api/aiw-api.exe~
+api/api.exe~
+400
+
+# Config with credentials (template only in repo)
+api/config.yaml

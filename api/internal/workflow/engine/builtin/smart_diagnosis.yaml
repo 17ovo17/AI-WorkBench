@@ -1,0 +1,126 @@
+workflow:
+  name: smart_diagnosis
+  description: 智能诊断 — 知识检索 + 指标采集 + 告警采集 + LLM 根因分析 + Runbook 匹配
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收诊断请求
+      inputs:
+        hostname: ""
+        time_range: "1h"
+        user_question: ""
+        trigger: "manual"
+        alert_id: ""
+        severity: "warning"
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索历史案例
+      config:
+        query: "{{start.user_question}} {{start.hostname}} {{start.severity}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: http_metrics
+    - id: http_metrics
+      type: http_request
+      title: 获取实时指标
+      parallel_group: data_collect
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 15000
+      fallback: {on_error: continue, fallback_value: '{"metrics":{}}'}
+      next: code_correlate
+    - id: http_alerts
+      type: http_request
+      title: 获取活跃告警
+      parallel_group: data_collect
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/alerts?limit=20"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"items":[]}'}
+      next: code_correlate
+    - id: code_correlate
+      type: code
+      title: 指标关联分析
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var metrics = inputs.metrics || {};
+          var alertItems = inputs.alerts || [];
+          var anomalies = [];
+          var thresholds = {cpu_usage_active:{w:70,c:90},mem_used_percent:{w:80,c:95},disk_used_percent:{w:80,c:90},disk_io_util:{w:70,c:90},load1_per_cpu:{w:0.7,c:1.0}};
+          var keys = Object.keys(thresholds);
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i]; var v = parseFloat(metrics[k]); if (isNaN(v)) continue;
+            var t = thresholds[k];
+            if (v >= t.c) anomalies.push({metric:k,value:v,status:'critical'});
+            else if (v >= t.w) anomalies.push({metric:k,value:v,status:'warning'});
+          }
+          var activeAlerts = [];
+          if (Array.isArray(alertItems)) { for (var j = 0; j < alertItems.length; j++) { if (alertItems[j].status === 'firing') activeAlerts.push(alertItems[j]); } }
+          var correlations = [];
+          var cpu = parseFloat(metrics.cpu_usage_active)||0; var io = parseFloat(metrics.disk_io_util)||0;
+          var mem = parseFloat(metrics.mem_used_percent)||0; var swap = parseFloat(metrics.swap_used_percent)||0;
+          if (cpu > 70 && io > 70) correlations.push('CPU高+IO高→可能是大查询或批处理任务');
+          if (mem > 80 && swap > 50) correlations.push('内存高+Swap高→可能存在内存泄漏');
+          if (cpu > 90 && mem > 90) correlations.push('CPU+内存双高→系统资源严重不足');
+          var sev = anomalies.some(function(a){return a.status==='critical';}) ? 'critical' : anomalies.length > 0 ? 'warning' : 'normal';
+          outputs = {anomalies:anomalies,active_alerts:activeAlerts,correlations:correlations,severity_assessment:sev};
+      inputs:
+        metrics: "{{http_metrics.response}}"
+        alerts: "{{http_alerts.response.items}}"
+      next: llm_diagnosis
+    - id: llm_diagnosis
+      type: llm
+      title: LLM 根因分析
+      config:
+        system_prompt: |
+          你是资深 SRE，使用 USE 方法论（Utilization/Saturation/Errors）进行根因分析。
+          请输出结构化 Markdown 诊断报告，不要输出 JSON。
+          报告必须包含：
+          1. 摘要表：主机、时间范围、触发来源、严重级别、结论、置信度。
+          2. Prometheus 证据表：指标名、真实值、状态、说明；只能使用输入中的真实 Prometheus 数据和关联分析。
+          3. 根因分析：按 USE（利用率/饱和度/错误）分段说明证据链。
+          4. 处置建议：立即止血、根治措施、回滚/风险提示。
+          5. PromQL 验证命令：给出可直接复制执行的 PromQL，例如 CPU、内存、磁盘、网络、负载或告警验证查询。
+          如果数据不足，请列出缺失数据和建议采集的 PromQL，禁止编造指标值。
+        user_prompt: |
+          主机: {{start.hostname}} | 范围: {{start.time_range}} | 触发: {{start.trigger}} | 严重: {{start.severity}}
+          问题: {{start.user_question}}
+          异常指标: {{code_correlate.anomalies}}
+          活跃告警: {{code_correlate.active_alerts}}
+          关联: {{code_correlate.correlations}}
+          历史案例: {{knowledge_retrieval.results}}
+          请基于上述真实 Prometheus 数据输出 Markdown 报告，并给出具体 PromQL 验证命令。
+        temperature: 0.05
+        max_tokens: 2000
+        json_mode: false
+      next: http_runbook_match
+    - id: http_runbook_match
+      type: http_request
+      title: 匹配 Runbook
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/knowledge/runbooks?category={{code_correlate.severity_assessment}}&limit=3"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"items":[]}'}
+      next: end
+    - id: end
+      type: end
+      title: 输出诊断结果
+      outputs:
+        diagnosis: "{{llm_diagnosis.result}}"
+        runbooks: "{{http_runbook_match.response}}"
+        correlations: "{{code_correlate.correlations}}"
+        severity: "{{code_correlate.severity_assessment}}"
+        metadata: {hostname: "{{start.hostname}}", trigger: "{{start.trigger}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 120000
+    retry: {max_attempts: 1, backoff: 2000}

@@ -1,0 +1,72 @@
+openapi: 3.0.0
+info:
+  title: AI WorkBench Prometheus 指标查询 API
+  description: 供 Dify 工作流调用，根据主机 IP 查询 Prometheus 实时指标。
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: AI WorkBench API（WSL 内部）
+paths:
+  /api/v1/aiops/data/prometheus/query:
+    post:
+      operationId: get_prometheus_metrics
+      summary: 查询主机实时 Prometheus 指标
+      description: |
+        根据主机 IP 查询 Prometheus 中的实时监控指标，
+        支持 CPU/内存/磁盘/网络等多维度指标。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ip
+              properties:
+                ip:
+                  type: string
+                  description: 主机 IP 地址
+                  example: "198.18.20.20"
+                time_range:
+                  type: string
+                  description: 时间范围（如 "15m" "1h" "6h" "24h"）
+                  default: "1h"
+                  example: "1h"
+                metrics:
+                  type: array
+                  items:
+                    type: string
+                  description: 指定要查询的指标列表（不传则返回全部默认指标）
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:
+                    type: string
+                  time_range:
+                    type: string
+                  metrics:
+                    type: object
+                    additionalProperties:
+                      type: number
+                    description: 指标名 → 当前值的键值对
+                  timestamp:
+                    type: string
+                    format: date-time
+        "400":
+          description: 参数错误
+        "401":
+          description: 未授权（需要 X-Admin-Token 或 Bearer Token）
+        "503":
+          description: Prometheus 不可用
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

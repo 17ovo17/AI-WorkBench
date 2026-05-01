@@ -1,0 +1,123 @@
+workflow:
+  name: diagnosis
+  description: AIOps 智能诊断工作流 — 知识检索 + 多源数据采集 + LLM 分析 + 置信度分级
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收诊断请求
+      inputs:
+        hostname: ""
+        time_range: "1h"
+        user_question: ""
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索历史案例
+      config:
+        query: "{{start.user_question}} {{start.hostname}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: http_metrics
+
+    - id: http_metrics
+      type: http_request
+      title: 获取实时指标
+      parallel_group: data_collect
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":{},"error":"prometheus_unavailable"}'
+      next: llm_diagnosis
+
+    - id: http_inspection
+      type: http_request
+      title: 获取最近告警
+      parallel_group: data_collect
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/alerts?ip={{start.hostname}}&limit=10"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"items":[]}'
+      next: llm_diagnosis
+
+    - id: llm_diagnosis
+      type: llm
+      title: LLM 综合诊断
+      config:
+        system_prompt: "file://prompts/diagnosis_system.txt"
+        user_prompt: |
+          ## 诊断请求
+          主机: {{start.hostname}}
+          时间范围: {{start.time_range}}
+          用户问题: {{start.user_question}}
+
+          ## 实时指标数据
+          {{http_metrics.response}}
+
+          ## 最近告警记录
+          {{http_inspection.response}}
+
+          ## 历史相似案例（Top3）
+          {{knowledge_retrieval.results}}
+
+          请基于以上数据进行综合诊断，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: condition
+
+    - id: condition
+      type: condition
+      title: 置信度分级
+      conditions:
+        - id: high_confidence
+          logic: and
+          rules:
+            - variable: "{{llm_diagnosis.confidence}}"
+              operator: equals
+              value: "HIGH"
+          next: end
+        - id: medium_confidence
+          logic: and
+          rules:
+            - variable: "{{llm_diagnosis.confidence}}"
+              operator: equals
+              value: "MEDIUM"
+          next: end
+        - id: low_confidence
+          logic: default
+          next: end
+
+    - id: end
+      type: end
+      title: 输出诊断结果
+      outputs:
+        diagnosis: "{{llm_diagnosis.result}}"
+        confidence: "{{llm_diagnosis.confidence}}"
+        data_sources:
+          prometheus: "{{http_metrics.status_code}}"
+          alerts: "{{http_inspection.status_code}}"
+          knowledge_base: "{{knowledge_retrieval.count}}"
+        metadata:
+          hostname: "{{start.hostname}}"
+          time_range: "{{start.time_range}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

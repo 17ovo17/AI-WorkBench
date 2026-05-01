@@ -1,0 +1,16 @@
+[Unit]
+Description=AI WorkBench Prometheus
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/prometheus \
+    --config.file=/opt/ai-workbench/docker/prometheus.yml \
+    --storage.tsdb.path=/opt/ai-workbench/prometheus-data \
+    --web.listen-address=0.0.0.0:9090 \
+    --web.enable-lifecycle
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

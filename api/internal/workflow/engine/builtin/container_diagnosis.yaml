@@ -1,0 +1,118 @@
+workflow:
+  name: container_diagnosis
+  description: K8s/容器诊断工作流 — 历史案例检索 + Pod 指标/事件并行采集 + LLM 综合诊断
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收容器诊断请求
+      inputs:
+        pod_name: ""
+        namespace: "default"
+        time_range: "1h"
+        user_question: ""
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索历史容器案例
+      config:
+        query: "container k8s pod {{start.pod_name}} {{start.user_question}}"
+        category: "container_oom"
+        top_k: 3
+        score_threshold: 0.3
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: http_pod_metrics
+
+    - id: http_pod_metrics
+      type: http_request
+      title: 获取 Pod 资源指标
+      parallel_group: pod_data
+      config:
+        method: POST
+        url: "http://127.0.0.1:8080/api/v1/aiops/data/prometheus/query"
+        headers:
+          Content-Type: application/json
+        body:
+          pod_name: "{{start.pod_name}}"
+          namespace: "{{start.namespace}}"
+          time_range: "{{start.time_range}}"
+          metrics: "container_memory_usage_bytes,container_cpu_usage_seconds_total,container_oom_events_total,kube_pod_container_status_restarts_total,kube_pod_status_ready"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":{},"error":"prometheus_unavailable"}'
+      next: llm_diagnosis
+
+    - id: http_pod_events
+      type: http_request
+      title: 获取 Pod 事件
+      parallel_group: pod_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/data/k8s/events?namespace={{start.namespace}}&pod={{start.pod_name}}&range={{start.time_range}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"events":[]}'
+      next: llm_diagnosis
+
+    - id: llm_diagnosis
+      type: llm
+      title: LLM 容器诊断
+      config:
+        system_prompt: |
+          你是 K8s 容器诊断专家。基于 Pod 指标、事件和历史案例，输出根因分析。
+          重点判断：是否 OOMKilled、CrashLoopBackOff、ImagePullBackOff、readiness 失败、资源 limit 不合理。
+          输出 JSON：{"root_cause_category":"container_oom|crash_loop|image_pull|resource_limit|other","root_cause":"详细描述","evidence":["证据1","证据2"],"recommended_actions":["处置建议"],"confidence":"HIGH|MEDIUM|LOW"}
+        user_prompt: |
+          ## 容器诊断请求
+          Pod: {{start.pod_name}}
+          Namespace: {{start.namespace}}
+          时间范围: {{start.time_range}}
+          用户问题: {{start.user_question}}
+
+          ## Pod 资源指标
+          {{http_pod_metrics.response}}
+
+          ## Pod 事件
+          {{http_pod_events.response}}
+
+          ## 历史相似案例
+          {{knowledge_retrieval.results}}
+
+          请基于以上数据进行容器诊断，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"root_cause_category":"unknown","root_cause":"分析失败","confidence":"LOW"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出容器诊断结果
+      outputs:
+        diagnosis: "{{llm_diagnosis.result}}"
+        confidence: "{{llm_diagnosis.confidence}}"
+        data_sources:
+          metrics: "{{http_pod_metrics.status_code}}"
+          events: "{{http_pod_events.status_code}}"
+          knowledge_base: "{{knowledge_retrieval.count}}"
+        metadata:
+          pod_name: "{{start.pod_name}}"
+          namespace: "{{start.namespace}}"
+          time_range: "{{start.time_range}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

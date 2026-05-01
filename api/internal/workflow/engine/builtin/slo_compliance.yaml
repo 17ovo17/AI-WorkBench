@@ -1,0 +1,113 @@
+workflow:
+  name: slo_compliance
+  description: SLO 达标分析 — SLI 指标采集 + Error Budget 计算 + LLM 评估
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收 SLO 分析请求
+      inputs:
+        service_name: ""
+        slo_target: ""
+        time_range: ""
+        sli_type: ""
+      next: http_sli_metrics
+
+    - id: http_sli_metrics
+      type: http_request
+      title: 采集 SLI 指标
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.service_name}}&focus=sli"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":[],"error":"unreachable"}'
+      next: code_budget_calc
+
+    - id: code_budget_calc
+      type: code
+      title: Error Budget 计算
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var metrics = {};
+            try { metrics = JSON.parse(inputs.sli_data || '{}'); } catch(e) {}
+            var target = parseFloat(inputs.slo_target) || 99.9;
+            var totalReqs = metrics.total_requests || 10000;
+            var failedReqs = metrics.failed_requests || 10;
+            var currentSli = totalReqs > 0 ? ((totalReqs - failedReqs) / totalReqs * 100) : 100;
+            var budgetTotal = (100 - target) / 100 * totalReqs;
+            var budgetConsumed = failedReqs;
+            var remainingPct = budgetTotal > 0 ? ((budgetTotal - budgetConsumed) / budgetTotal * 100) : 0;
+            var burnRate = budgetTotal > 0 ? (budgetConsumed / budgetTotal) : 0;
+            var daysLeft = burnRate > 0 ? Math.floor((budgetTotal - budgetConsumed) / (budgetConsumed / 30)) : 999;
+            return {
+              error_budget_total: budgetTotal.toFixed(0),
+              consumed: budgetConsumed,
+              remaining_percent: remainingPct.toFixed(2),
+              burn_rate: burnRate.toFixed(4),
+              estimated_exhaustion_days: daysLeft,
+              current_sli: currentSli.toFixed(4)
+            };
+          }
+      inputs:
+        sli_data: "{{http_sli_metrics.response}}"
+        slo_target: "{{start.slo_target}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"error_budget_total":"0","consumed":0,"remaining_percent":"0","burn_rate":"0"}'
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索 SLO 知识库
+      config:
+        query: "{{start.service_name}} SLO error_budget"
+        top_k: 3
+      fallback:
+        on_error: continue
+        fallback_value: '{"results":[]}'
+      next: llm_slo_analysis
+
+    - id: llm_slo_analysis
+      type: llm
+      title: LLM SLO 综合分析
+      config:
+        system_prompt: |
+          你是 SLO/SRE 专家。综合 SLI 指标和 Error Budget 数据，评估服务达标状态并给出建议。
+          输出 JSON：{"slo_status":"met|at_risk|breached","current_sli":"","error_budget_remaining_percent":"","burn_rate":"","recommendations":[],"summary":""}
+        user_prompt: |
+          ## SLO 达标分析
+          服务: {{start.service_name}} | 目标: {{start.slo_target}}% | 时间范围: {{start.time_range}}
+          ## Error Budget
+          总预算: {{code_budget_calc.error_budget_total}} | 已消耗: {{code_budget_calc.consumed}}
+          剩余: {{code_budget_calc.remaining_percent}}% | 燃烧率: {{code_budget_calc.burn_rate}}
+          预计耗尽: {{code_budget_calc.estimated_exhaustion_days}} 天
+          ## 知识库参考
+          {{knowledge_retrieval.results}}
+          请综合分析并严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"slo_status":"unknown","summary":"分析失败"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出 SLO 分析结果
+      outputs:
+        analysis: "{{llm_slo_analysis.result}}"
+        metadata:
+          service_name: "{{start.service_name}}"
+          slo_target: "{{start.slo_target}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 90000

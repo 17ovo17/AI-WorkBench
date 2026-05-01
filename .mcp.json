@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codex": {
+      "type": "stdio",
+      "command": "D:\\npm_global\\codex.cmd",
+      "args": ["mcp-server"]
+    }
+  }
+}

@@ -1,0 +1,120 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: AI WorkBench
+    - navigation [ref=e6]:
+      - link "智能对话" [ref=e7] [cursor=pointer]:
+        - /url: /workbench
+        - img [ref=e9]
+        - generic [ref=e12]: 智能对话
+      - link "智能诊断" [ref=e13] [cursor=pointer]:
+        - /url: /diagnose
+        - img [ref=e15]
+        - generic [ref=e17]: 智能诊断
+      - link "告警中心" [ref=e18] [cursor=pointer]:
+        - /url: /alerts
+        - img [ref=e20]
+        - generic [ref=e24]: 告警中心
+      - link "业务拓扑" [ref=e25] [cursor=pointer]:
+        - /url: /topology
+        - img [ref=e27]
+        - generic [ref=e29]: 业务拓扑
+      - link "探针管理" [ref=e30] [cursor=pointer]:
+        - /url: /catpaw
+        - img [ref=e32]
+        - generic [ref=e35]: 探针管理
+      - link "AI 配置" [ref=e37] [cursor=pointer]:
+        - /url: /settings/ai
+        - img [ref=e39]
+        - generic [ref=e41]: AI 配置
+      - link "数据源" [ref=e42] [cursor=pointer]:
+        - /url: /settings/datasource
+        - img [ref=e44]
+        - generic [ref=e48]: 数据源
+    - generic [ref=e49]:
+      - generic [ref=e51]: 用户名
+      - img [ref=e53]
+    - generic [ref=e55]:
+      - button [ref=e56] [cursor=pointer]:
+        - img [ref=e58]
+      - button [ref=e60] [cursor=pointer]:
+        - img [ref=e62]
+  - main [ref=e64]:
+    - generic [ref=e65]:
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - text: BUSINESS TOPOLOGY
+          - heading "业务拓扑" [level=1] [ref=e68]
+          - paragraph [ref=e69]: 按用户定义的业务、服务器 IP 和端口进行自动发现；不会混入其他无关主机。
+        - generic [ref=e70]:
+          - button "新增业务端口" [ref=e71] [cursor=pointer]:
+            - generic [ref=e72]: 新增业务端口
+          - button "添加节点" [ref=e73] [cursor=pointer]:
+            - generic [ref=e74]: 添加节点
+          - button "重新发现" [ref=e75] [cursor=pointer]:
+            - generic [ref=e76]: 重新发现
+          - button "保存当前业务" [ref=e77] [cursor=pointer]:
+            - generic [ref=e78]: 保存当前业务
+      - generic [ref=e79]:
+        - complementary [ref=e80]:
+          - generic [ref=e81]:
+            - heading "业务列表" [level=3] [ref=e82]
+            - emphasis [ref=e83]: 1 项
+          - generic [ref=e85] [cursor=pointer]:
+            - button "全量测试业务-1777060049538 6 台服务器 · 7 个端口" [ref=e86]
+            - generic [ref=e89]
+          - generic [ref=e94]:
+            - heading "当前业务" [level=3] [ref=e95]
+            - paragraph [ref=e96]: 全量测试业务-1777060049538
+            - generic [ref=e232]: 198.18.20.11
+            - generic [ref=e234]: 198.18.20.12
+            - generic [ref=e236]: 198.18.20.20
+            - generic [ref=e238]: 198.18.22.11
+            - generic [ref=e240]: 198.18.22.12
+            - generic [ref=e242]: 198.18.22.13
+        - main [ref=e97]:
+          - generic:
+            - generic
+            - generic: 全量测试业务-1777060049538 · 节点 19 · 连线 13
+          - generic [ref=e98]:
+            - generic
+            - generic
+            - generic
+            - generic
+            - generic
+            - generic
+            - generic
+            - img [ref=e99]
+            - generic [ref=e139] [cursor=pointer]
+            - generic [ref=e143] [cursor=pointer]
+            - generic [ref=e147] [cursor=pointer]
+            - generic [ref=e151] [cursor=pointer]
+            - generic [ref=e155] [cursor=pointer]
+            - generic [ref=e159] [cursor=pointer]
+            - generic [ref=e163] [cursor=pointer]
+            - generic [ref=e167] [cursor=pointer]
+            - generic [ref=e171] [cursor=pointer]
+            - generic [ref=e175] [cursor=pointer]
+            - generic [ref=e179] [cursor=pointer]
+            - generic [ref=e183] [cursor=pointer]
+            - generic [ref=e187] [cursor=pointer]
+            - generic [ref=e191] [cursor=pointer]
+            - generic [ref=e195] [cursor=pointer]
+            - generic [ref=e199] [cursor=pointer]
+            - generic [ref=e203] [cursor=pointer]
+            - generic [ref=e207] [cursor=pointer]
+            - generic [ref=e211] [cursor=pointer]
+        - complementary [ref=e215]:
+          - generic [ref=e216]:
+            - heading "发现详情" [level=3] [ref=e217]
+            - button "删除节点" [ref=e218] [cursor=pointer]
+          - strong [ref=e220]: 198.18.20.11
+          - paragraph [ref=e221]: 服务器 · 离线
+          - list [ref=e222]:
+            - listitem [ref=e223]: IP：198.18.20.11
+            - listitem [ref=e224]: 来源：自动发现入口主机
+          - generic [ref=e225]:
+            - text: 198.18.20.11 → 198.18.20.11:9100 Prometheus Target
+            - generic [ref=e227]: "Prometheus target · Get \"http://198.18.20.11:9100/metrics\": context deadline exceeded"
+          - generic [ref=e228]:
+            - text: 198.18.20.11 → 198.18.20.11:8081 JVM应用
+            - generic [ref=e230]: "JVM应用 · dial tcp 198.18.20.11:8081: i/o timeout"

@@ -1,0 +1,15 @@
+/* Markdown 渲染内容样式 - 用于 v-html 渲染的 marked 输出 */
+.md :deep(h1), .md :deep(h2), .md :deep(h3) { margin: 12px 0; }
+.md :deep(h2) { font-size: 18px; background: linear-gradient(135deg, rgba(47,124,255,.08), rgba(47,124,255,.02)); padding: 8px 12px; border-left: 4px solid #2f7cff; border-radius: 6px; }
+.md :deep(h3) { font-size: 16px; padding-left: 10px; border-left: 3px solid #7da7ff; }
+.md :deep(p), .md :deep(li) { line-height: 1.8; }
+.md :deep(pre) { overflow: auto; border-radius: 12px; padding: 12px; background: #0f172a; color: #e2e8f0; max-width: 100%; }
+.md :deep(table) { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+.md :deep(th), .md :deep(td) { padding: 8px 10px; border: 1px solid rgba(216,226,246,.9); text-align: left; }
+.md :deep(th) { background: rgba(47,124,255,.08); color: #243553; font-weight: 600; }
+.md :deep(tr:hover) { background: rgba(47,124,255,.03); }
+.md :deep(strong) { color: #ef5454; }
+.md :deep(blockquote) { border-left: 4px solid #2f7cff; padding: 8px 12px; margin: 12px 0; background: rgba(47,124,255,.04); border-radius: 0 6px 6px 0; color: #5e718c; }
+.md :deep(hr) { border: none; border-top: 2px solid rgba(216,226,246,.5); margin: 16px 0; }
+.md :deep(code) { background: rgba(47,124,255,.08); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #2f7cff; }
+.md { overflow-x: auto; word-break: break-word; }

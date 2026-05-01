@@ -1,0 +1,157 @@
+workflow:
+  name: dependency_health
+  description: 依赖健康巡检工作流 — DB/Redis/MQ 并行探活 + 聚合状态 + LLM 总结
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收依赖巡检请求
+      inputs:
+        business_id: ""
+      next: http_db_check
+
+    - id: http_db_check
+      type: http_request
+      title: 数据库探活
+      parallel_group: deps
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/health/db?business_id={{start.business_id}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"db","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: http_redis_check
+      type: http_request
+      title: Redis 探活
+      parallel_group: deps
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/health/redis?business_id={{start.business_id}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"redis","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: http_mq_check
+      type: http_request
+      title: MQ 探活
+      parallel_group: deps
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/health/mq?business_id={{start.business_id}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"mq","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: code_aggregate
+      type: code
+      title: 聚合依赖健康状态
+      config:
+        language: javascript
+        timeout: 5000
+        code: |
+          function main(inputs) {
+            var deps = [];
+            var raws = [inputs.db_response, inputs.redis_response, inputs.mq_response];
+            var names = ['db', 'redis', 'mq'];
+            for (var i = 0; i < raws.length; i++) {
+              var data = {};
+              try { data = JSON.parse(raws[i] || '{}'); } catch (e) { data = {}; }
+              deps.push({
+                name: data.name || names[i],
+                ok: data.ok === true,
+                latency_ms: parseFloat(data.latency_ms || 0),
+                error: data.error || '',
+                detail: data.detail || {}
+              });
+            }
+            var unhealthy = deps.filter(function(d) { return !d.ok; });
+            var slow = deps.filter(function(d) { return d.ok && d.latency_ms > 200; });
+            var overallStatus;
+            if (unhealthy.length > 0) overallStatus = 'critical';
+            else if (slow.length > 0) overallStatus = 'degraded';
+            else overallStatus = 'healthy';
+
+            return {
+              overall_status: overallStatus,
+              total: deps.length,
+              healthy_count: deps.length - unhealthy.length,
+              unhealthy_count: unhealthy.length,
+              slow_count: slow.length,
+              dependencies: deps,
+              unhealthy_list: unhealthy,
+              slow_list: slow
+            };
+          }
+      inputs:
+        db_response: "{{http_db_check.response}}"
+        redis_response: "{{http_redis_check.response}}"
+        mq_response: "{{http_mq_check.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_status":"unknown","dependencies":[]}'
+      next: llm_summary
+
+    - id: llm_summary
+      type: llm
+      title: LLM 健康总结
+      config:
+        system_prompt: |
+          你是依赖健康巡检专家。基于 DB/Redis/MQ 的探活结果，输出健康总结、风险点和处置建议。
+          输出 JSON：{"summary":"摘要","status":"healthy|degraded|critical","risk_points":["风险点"],"action_items":[{"dependency":"","action":"","priority":"P0|P1|P2"}],"confidence":"HIGH|MEDIUM|LOW"}
+        user_prompt: |
+          ## 依赖健康巡检
+          业务 ID: {{start.business_id}}
+
+          ## 整体状态
+          {{code_aggregate.overall_status}}（健康 {{code_aggregate.healthy_count}} / 总数 {{code_aggregate.total}}）
+
+          ## 依赖详情
+          {{code_aggregate.dependencies}}
+
+          ## 不健康依赖
+          {{code_aggregate.unhealthy_list}}
+
+          ## 慢响应依赖（>200ms）
+          {{code_aggregate.slow_list}}
+
+          请生成健康总结，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 1500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"summary":"分析失败","status":"unknown","confidence":"LOW"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出依赖巡检结果
+      outputs:
+        summary: "{{llm_summary.result}}"
+        overall_status: "{{code_aggregate.overall_status}}"
+        confidence: "{{llm_summary.confidence}}"
+        statistics:
+          total: "{{code_aggregate.total}}"
+          healthy: "{{code_aggregate.healthy_count}}"
+          unhealthy: "{{code_aggregate.unhealthy_count}}"
+          slow: "{{code_aggregate.slow_count}}"
+        dependencies: "{{code_aggregate.dependencies}}"
+        metadata:
+          business_id: "{{start.business_id}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 90000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

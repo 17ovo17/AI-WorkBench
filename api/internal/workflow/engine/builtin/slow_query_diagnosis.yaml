@@ -1,0 +1,119 @@
+workflow:
+  name: slow_query_diagnosis
+  description: 慢查询诊断工作流 — 采集慢查询 → 分类归因 → 知识检索 → LLM 优化建议
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收慢查询诊断请求
+      inputs:
+        hostname: ""
+        threshold_ms: "1000"
+        limit: "20"
+      next: http_slow_queries
+
+    - id: http_slow_queries
+      type: http_request
+      title: 获取慢查询列表
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/mysql/slow-queries?hostname={{start.hostname}}&threshold={{start.threshold_ms}}&limit={{start.limit}}"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"queries":[],"error":"slow_query_fetch_failed"}'
+      next: code_classify
+
+    - id: code_classify
+      type: code
+      title: 慢查询分类
+      config:
+        language: javascript
+        code: |
+          function main(inputs) {
+            var data = inputs.http_slow_queries_response || '{"queries":[]}';
+            var parsed = typeof data === 'string' ? JSON.parse(data) : data;
+            var queries = parsed.queries || [];
+            var cats = { full_scan:[], missing_index:[], lock_wait:[], large_result:[], subquery:[] };
+            for (var i = 0; i < queries.length; i++) {
+              var q = queries[i];
+              var sql = (q.sql || '').toUpperCase();
+              if (/SELECT\s+\*/.test(sql) && !/WHERE/.test(sql)) cats.full_scan.push(q);
+              else if (/FILESORT|TEMPORARY/.test(q.extra || '')) cats.missing_index.push(q);
+              else if ((q.lock_time_ms || 0) > 100) cats.lock_wait.push(q);
+              else if ((q.rows_examined || 0) > 10000) cats.large_result.push(q);
+              else if (/SELECT.*SELECT/.test(sql)) cats.subquery.push(q);
+            }
+            var summary = {};
+            for (var k in cats) summary[k] = cats[k].length;
+            return { total: queries.length, categories: cats, summary: summary, top_slow: queries.slice(0,5) };
+          }
+      fallback:
+        on_error: continue
+        fallback_value: '{"total":0,"categories":{},"summary":{},"top_slow":[]}'
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索慢查询优化案例
+      config:
+        query: "MySQL 慢查询优化 {{start.hostname}}"
+        top_k: 5
+        score_threshold: 0.2
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: llm_optimize
+
+    - id: llm_optimize
+      type: llm
+      title: LLM 优化建议
+      config:
+        system_prompt: |
+          你是资深 DBA，擅长 MySQL 慢查询优化。
+          请分析慢查询分类结果，给出具体优化建议。
+          输出 JSON 格式：
+          {"optimizations":[{"sql_sample":"SQL片段","issue":"问题","suggestion":"建议","priority":"high/medium/low"}],"index_recommendations":["索引建议"],"general_advice":["通用建议"],"summary":"一句话总结"}
+        user_prompt: |
+          ## 诊断请求
+          主机: {{start.hostname}}
+          阈值: {{start.threshold_ms}}ms
+
+          ## 慢查询分类统计
+          {{code_classify.summary}}
+
+          ## Top 5 最慢查询
+          {{code_classify.top_slow}}
+
+          ## 分类详情
+          {{code_classify.categories}}
+
+          ## 历史优化案例
+          {{knowledge_retrieval.results}}
+
+          请基于以上数据给出优化建议，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"optimizations":[],"index_recommendations":[],"general_advice":[],"summary":"LLM 分析不可用"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出优化报告
+      outputs:
+        report: "{{llm_optimize.result}}"
+        hostname: "{{start.hostname}}"
+        total_slow_queries: "{{code_classify.total}}"
+        category_summary: "{{code_classify.summary}}"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

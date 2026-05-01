@@ -1,0 +1,119 @@
+workflow:
+  name: storage_health_check
+  description: 存储健康检查 — 磁盘/NFS/OSS 并行探活 + LLM 评估
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收存储健康检查请求
+      inputs:
+        hostname: ""
+        storage_types: ""
+      next: http_disk_metrics
+
+    - id: http_disk_metrics
+      type: http_request
+      title: 磁盘指标采集
+      parallel_group: storage_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}&focus=disk"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"disk","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: http_nfs_check
+      type: http_request
+      title: NFS 探活
+      parallel_group: storage_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/datasources"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"nfs","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: http_oss_check
+      type: http_request
+      title: OSS 探活
+      parallel_group: storage_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/storage"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"oss","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+
+    - id: code_aggregate
+      type: code
+      title: 聚合存储健康状态
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var items = [];
+            var raws = [inputs.disk, inputs.nfs, inputs.oss];
+            var names = ['disk', 'nfs', 'oss'];
+            for (var i = 0; i < raws.length; i++) {
+              var d = {};
+              try { d = JSON.parse(raws[i] || '{}'); } catch(e) {}
+              var ok = d.ok !== false && !d.error;
+              items.push({name: d.name || names[i], ok: ok, usage_pct: d.usage_pct || 0, error: d.error || '', detail: d.detail || {}});
+            }
+            var risks = items.filter(function(s) { return !s.ok || s.usage_pct > 85; });
+            var overall = risks.length > 0 ? (items.some(function(s){return !s.ok;}) ? 'critical' : 'warning') : 'healthy';
+            return { overall_status: overall, storage_items: items, risk_items: risks, risk_count: risks.length };
+          }
+      inputs:
+        disk: "{{http_disk_metrics.response}}"
+        nfs: "{{http_nfs_check.response}}"
+        oss: "{{http_oss_check.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_status":"unknown","storage_items":[]}'
+      next: llm_storage_analysis
+
+    - id: llm_storage_analysis
+      type: llm
+      title: LLM 存储健康评估
+      config:
+        system_prompt: |
+          你是存储运维专家。基于磁盘/NFS/OSS 探活结果，评估整体健康状态并给出容量建议。
+          输出 JSON：{"overall_status":"healthy|warning|critical","storage_items":[],"urgent_actions":[],"capacity_recommendations":[],"summary":""}
+        user_prompt: |
+          ## 存储健康检查
+          主机: {{start.hostname}} | 存储类型: {{start.storage_types}}
+          ## 整体状态: {{code_aggregate.overall_status}}
+          ## 存储详情
+          {{code_aggregate.storage_items}}
+          ## 风险项 ({{code_aggregate.risk_count}})
+          {{code_aggregate.risk_items}}
+          请综合评估并严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_status":"unknown","summary":"分析失败"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出存储健康检查结果
+      outputs:
+        analysis: "{{llm_storage_analysis.result}}"
+        metadata:
+          hostname: "{{start.hostname}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000

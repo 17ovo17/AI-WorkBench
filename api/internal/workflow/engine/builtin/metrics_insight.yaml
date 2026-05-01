@@ -1,0 +1,110 @@
+workflow:
+  name: metrics_insight
+  description: 指标洞察 — 异常检测 + 趋势分析 + 容量预测 + LLM 解读
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收分析请求
+      inputs:
+        hostname: ""
+        time_range: "6h"
+        analysis_type: "anomaly"
+        focus_area: ""
+        slo_target: "99.9"
+      next: http_metrics
+    - id: http_metrics
+      type: http_request
+      title: 获取时序指标
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 15000
+      fallback: {on_error: continue, fallback_value: '{"metrics":{}}'}
+      next: code_multi_analysis
+    - id: code_multi_analysis
+      type: code
+      title: 多维分析引擎
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var type = inputs.analysis_type || 'anomaly';
+          var metrics = inputs.metrics || {};
+          var sloTarget = parseFloat(inputs.slo_target) || 99.9;
+          var result = {analysis_type: type, findings: []};
+          if (type === 'anomaly') {
+            var th = {cpu_usage_active:{w:70,c:90},mem_used_percent:{w:80,c:95},disk_used_percent:{w:80,c:90},disk_io_util:{w:70,c:90},load1_per_cpu:{w:0.7,c:1.0},net_drop_in:{w:100,c:1000},tcp_time_wait:{w:5000,c:20000}};
+            var keys = Object.keys(th);
+            for (var i = 0; i < keys.length; i++) {
+              var k = keys[i]; var v = parseFloat(metrics[k]); if (isNaN(v)) continue;
+              var t = th[k]; var s = v >= t.c ? 'critical' : v >= t.w ? 'warning' : 'normal';
+              if (s !== 'normal') result.findings.push({metric:k,value:v,threshold_warn:t.w,threshold_crit:t.c,status:s});
+            }
+            result.anomaly_count = result.findings.length;
+          } else if (type === 'forecast') {
+            var cpu = parseFloat(metrics.cpu_usage_active)||0;
+            var mem = parseFloat(metrics.mem_used_percent)||0;
+            var disk = parseFloat(metrics.disk_used_percent)||0;
+            var cpuD = cpu > 0 ? Math.max(Math.round((90-cpu)/(cpu*0.01)),0) : 999;
+            var memD = mem > 0 ? Math.max(Math.round((95-mem)/(mem*0.005)),0) : 999;
+            var diskD = disk > 0 ? Math.max(Math.round((90-disk)/(disk*0.002)),0) : 999;
+            result.forecasts = [{resource:'cpu',current:cpu,threshold:90,days_to_threshold:cpuD},{resource:'memory',current:mem,threshold:95,days_to_threshold:memD},{resource:'disk',current:disk,threshold:90,days_to_threshold:diskD}];
+            result.earliest_breach = Math.min(cpuD,memD,diskD);
+          } else if (type === 'slo') {
+            var errorRate = parseFloat(metrics.http_error_rate)||0;
+            var budgetTotal = 100 - sloTarget;
+            var remaining = Math.max(budgetTotal - errorRate, 0);
+            var remainingPct = budgetTotal > 0 ? (remaining/budgetTotal)*100 : 100;
+            result.slo = {target:sloTarget,current_availability:100-errorRate,budget_total:budgetTotal,consumed:errorRate,remaining:remaining,remaining_percent:remainingPct,burn_rate:budgetTotal>0?errorRate/budgetTotal:0};
+          } else if (type === 'traffic') {
+            var rps = parseFloat(metrics.http_requests_per_second)||0;
+            var baseline = parseFloat(metrics.http_requests_baseline)||rps;
+            var std = baseline * 0.2; var z = std > 0 ? (rps-baseline)/std : 0;
+            result.traffic = {current_rps:rps,baseline_rps:baseline,z_score:Math.round(z*100)/100,status:z>2?'spike':z<-2?'drop':'normal'};
+          }
+          outputs = result;
+      inputs:
+        analysis_type: "{{start.analysis_type}}"
+        metrics: "{{http_metrics.response}}"
+        slo_target: "{{start.slo_target}}"
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索分析知识
+      config:
+        query: "{{start.analysis_type}} {{start.hostname}} {{start.focus_area}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: llm_insight
+    - id: llm_insight
+      type: llm
+      title: LLM 指标解读
+      config:
+        system_prompt: |
+          你是资深运维工程师，擅长指标分析和容量规划。根据 analysis_type 输出对应 JSON：
+          anomaly: {"summary":"","anomaly_analysis":[{"metric":"","value":"","interpretation":"","risk_level":"","action":""}],"correlation":"","overall_risk":""}
+          forecast: {"summary":"","capacity_analysis":[{"resource":"","current":"","days_remaining":0,"recommendation":""}],"priority":"","budget_estimate":""}
+          slo: {"summary":"","budget_status":"","burn_rate_analysis":"","recommendations":[]}
+          traffic: {"summary":"","pattern":"","anomaly_detected":false,"recommendations":[]}
+        user_prompt: |
+          主机: {{start.hostname}} | 类型: {{start.analysis_type}} | 关注: {{start.focus_area}}
+          分析结果: {{code_multi_analysis}}
+          原始指标: {{http_metrics.response}}
+          参考: {{knowledge_retrieval.results}}
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: end
+    - id: end
+      type: end
+      title: 输出洞察报告
+      outputs:
+        insight: "{{llm_insight.result}}"
+        analysis: "{{code_multi_analysis}}"
+        metadata: {hostname: "{{start.hostname}}", analysis_type: "{{start.analysis_type}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    retry: {max_attempts: 1, backoff: 2000}

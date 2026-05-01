@@ -1,0 +1,115 @@
+workflow:
+  name: middleware_inspection
+  description: 中间件巡检 — Kafka/RabbitMQ/ES 并行探活 + LLM 评估
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收中间件巡检请求
+      inputs:
+        business_id: ""
+        middleware_types: ""
+      next: http_kafka_check
+    - id: http_kafka_check
+      type: http_request
+      title: Kafka 探活
+      parallel_group: mw_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/datasources"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"kafka","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+    - id: http_mq_check
+      type: http_request
+      title: RabbitMQ 探活
+      parallel_group: mw_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/health/ai-providers"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"rabbitmq","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+    - id: http_es_check
+      type: http_request
+      title: Elasticsearch 探活
+      parallel_group: mw_probe
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.business_id}}&focus=middleware"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"name":"elasticsearch","ok":false,"error":"unreachable"}'
+      next: code_aggregate
+    - id: code_aggregate
+      type: code
+      title: 聚合中间件健康状态
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var components = [];
+            var raws = [inputs.kafka, inputs.mq, inputs.es];
+            var names = ['kafka', 'rabbitmq', 'elasticsearch'];
+            for (var i = 0; i < raws.length; i++) {
+              var d = {};
+              try { d = JSON.parse(raws[i] || '{}'); } catch(e) {}
+              var ok = d.ok !== false && !d.error;
+              var lag = d.consumer_lag || 0;
+              var queueSize = d.queue_size || 0;
+              var clusterStatus = d.cluster_status || 'unknown';
+              var risk = (!ok || lag > 10000 || queueSize > 50000 || clusterStatus === 'yellow' || clusterStatus === 'red');
+              components.push({name: d.name || names[i], ok: ok, risk: risk, lag: lag, queue_size: queueSize, cluster_status: clusterStatus, error: d.error || ''});
+            }
+            var risks = components.filter(function(c) { return c.risk; });
+            var overall = risks.length === 0 ? 'healthy' : (components.some(function(c){return !c.ok;}) ? 'critical' : 'warning');
+            return { overall_status: overall, components: components, risk_items: risks, risk_count: risks.length };
+          }
+      inputs:
+        kafka: "{{http_kafka_check.response}}"
+        mq: "{{http_mq_check.response}}"
+        es: "{{http_es_check.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_status":"unknown","components":[]}'
+      next: llm_middleware_summary
+    - id: llm_middleware_summary
+      type: llm
+      title: LLM 中间件评估
+      config:
+        system_prompt: |
+          你是中间件运维专家。基于 Kafka/RabbitMQ/ES 探活结果，评估整体状态并给出优化建议。
+          输出 JSON：{"overall_status":"healthy|warning|critical","components":[],"urgent_actions":[],"optimization_suggestions":[],"summary":""}
+        user_prompt: |
+          ## 中间件巡检
+          业务 ID: {{start.business_id}} | 中间件类型: {{start.middleware_types}}
+          ## 整体状态: {{code_aggregate.overall_status}}
+          ## 组件详情
+          {{code_aggregate.components}}
+          ## 风险项 ({{code_aggregate.risk_count}})
+          {{code_aggregate.risk_items}}
+          请综合评估并严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_status":"unknown","summary":"分析失败"}'
+      next: end
+    - id: end
+      type: end
+      title: 输出中间件巡检报告
+      outputs:
+        report: "{{llm_middleware_summary.result}}"
+        metadata:
+          business_id: "{{start.business_id}}"
+          workflow_version: "1.0.0"
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000

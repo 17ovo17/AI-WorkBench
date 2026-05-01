@@ -1,0 +1,118 @@
+workflow:
+  name: traffic_anomaly_detect
+  description: 流量异常检测 — 当前/基线流量对比 + z-score + LLM 分析
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收流量异常检测请求
+      inputs:
+        service_name: ""
+        time_range: ""
+        baseline_window: ""
+      next: http_current_traffic
+    - id: http_current_traffic
+      type: http_request
+      title: 采集当前流量
+      parallel_group: traffic_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.service_name}}&focus=traffic"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":[],"error":"unreachable"}'
+      next: code_anomaly_score
+    - id: http_baseline_traffic
+      type: http_request
+      title: 采集基线流量
+      parallel_group: traffic_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.service_name}}&focus=baseline"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":[],"error":"unreachable"}'
+      next: code_anomaly_score
+    - id: code_anomaly_score
+      type: code
+      title: Z-Score 异常评分
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var current = {}, baseline = {};
+            try { current = JSON.parse(inputs.current || '{}'); } catch(e) {}
+            try { baseline = JSON.parse(inputs.baseline || '{}'); } catch(e) {}
+            var curRps = current.rps || 0;
+            var blMean = baseline.mean_rps || curRps;
+            var blStd = baseline.std_rps || 1;
+            var zScore = blStd > 0 ? (curRps - blMean) / blStd : 0;
+            var absZ = Math.abs(zScore);
+            var anomalies = [];
+            var anomalyType = 'none';
+            if (absZ > 3) {
+              anomalyType = zScore > 0 ? 'spike' : 'drop';
+              anomalies.push({metric: 'rps', z_score: zScore.toFixed(2), type: anomalyType, current: curRps, baseline_mean: blMean});
+            }
+            return {
+              anomalies: anomalies,
+              anomaly_score: absZ.toFixed(2),
+              anomaly_type: anomalyType,
+              z_score: zScore.toFixed(2)
+            };
+          }
+      inputs:
+        current: "{{http_current_traffic.response}}"
+        baseline: "{{http_baseline_traffic.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"anomalies":[],"anomaly_score":"0","anomaly_type":"none"}'
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索流量异常知识库
+      config:
+        query: "流量异常 {{start.service_name}}"
+        top_k: 3
+      fallback:
+        on_error: continue
+        fallback_value: '{"results":[]}'
+      next: llm_anomaly_analysis
+    - id: llm_anomaly_analysis
+      type: llm
+      title: LLM 流量异常分析
+      config:
+        system_prompt: |
+          你是流量异常检测专家。基于 z-score 和历史知识，判断异常类型、严重程度并给出建议。
+          输出 JSON：{"anomaly_detected":true/false,"anomaly_type":"","severity":"low|medium|high|critical","possible_causes":[],"recommendations":[],"summary":""}
+        user_prompt: |
+          ## 流量异常检测
+          服务: {{start.service_name}} | 时间范围: {{start.time_range}}
+          ## Z-Score 分析
+          异常评分: {{code_anomaly_score.anomaly_score}} | 类型: {{code_anomaly_score.anomaly_type}}
+          异常列表: {{code_anomaly_score.anomalies}}
+          ## 知识库参考
+          {{knowledge_retrieval.results}}
+          请综合分析并严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"anomaly_detected":false,"severity":"unknown","summary":"分析失败"}'
+      next: end
+    - id: end
+      type: end
+      title: 输出流量异常检测结果
+      outputs:
+        analysis: "{{llm_anomaly_analysis.result}}"
+        anomalies: "{{code_anomaly_score.anomalies}}"
+        metadata:
+          service_name: "{{start.service_name}}"
+          workflow_version: "1.0.0"
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000

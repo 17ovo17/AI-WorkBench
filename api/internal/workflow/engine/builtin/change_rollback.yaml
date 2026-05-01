@@ -1,0 +1,127 @@
+workflow:
+  name: change_rollback
+  description: 变更回滚审计工作流 — 最近变更采集 + 变更对比 + LLM 风险评估 + 条件分支
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收变更回滚审计请求
+      inputs:
+        service_name: ""
+        time_range: "24h"
+      next: http_recent_changes
+
+    - id: http_recent_changes
+      type: http_request
+      title: 获取最近变更列表
+      parallel_group: change_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/changes?service={{start.service_name}}&range={{start.time_range}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"changes":[]}'
+      next: llm_risk_assess
+
+    - id: http_change_diff
+      type: http_request
+      title: 获取变更内容 diff
+      parallel_group: change_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/changes/diff?service={{start.service_name}}&range={{start.time_range}}"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"diffs":[]}'
+      next: llm_risk_assess
+
+    - id: llm_risk_assess
+      type: llm
+      title: LLM 变更风险评估
+      config:
+        system_prompt: |
+          你是变更管理专家。基于最近的变更记录和 diff，评估每条变更的风险，并给出是否需要回滚的建议。
+          关注：变更范围、影响面、灰度比例、是否有故障关联、回滚成本。
+          输出 JSON：{"overall_risk":"HIGH|MEDIUM|LOW","high_risk_changes":[{"change_id":"","reason":"","rollback_priority":1}],"rollback_recommendation":"立即回滚|保留观察|无需回滚","action_plan":["步骤1","步骤2"],"confidence":"HIGH|MEDIUM|LOW"}
+        user_prompt: |
+          ## 变更回滚审计
+          服务: {{start.service_name}}
+          时间范围: {{start.time_range}}
+
+          ## 最近变更列表
+          {{http_recent_changes.response}}
+
+          ## 变更 diff
+          {{http_change_diff.response}}
+
+          请评估变更风险，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2500
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"overall_risk":"LOW","rollback_recommendation":"保留观察","confidence":"LOW"}'
+      next: condition
+
+    - id: condition
+      type: condition
+      title: 风险等级分支
+      conditions:
+        - id: high_risk
+          logic: and
+          rules:
+            - variable: "{{llm_risk_assess.overall_risk}}"
+              operator: equals
+              value: "HIGH"
+          next: end_high_risk
+        - id: medium_risk
+          logic: and
+          rules:
+            - variable: "{{llm_risk_assess.overall_risk}}"
+              operator: equals
+              value: "MEDIUM"
+          next: end_medium_risk
+        - id: low_risk
+          logic: default
+          next: end_low_risk
+
+    - id: end_high_risk
+      type: end
+      title: 高风险 - 建议立即回滚
+      outputs:
+        risk_level: "HIGH"
+        action: "rollback_required"
+        assessment: "{{llm_risk_assess.result}}"
+        service_name: "{{start.service_name}}"
+        recommendation: "立即按 high_risk_changes 优先级执行回滚"
+
+    - id: end_medium_risk
+      type: end
+      title: 中风险 - 保留观察
+      outputs:
+        risk_level: "MEDIUM"
+        action: "monitor"
+        assessment: "{{llm_risk_assess.result}}"
+        service_name: "{{start.service_name}}"
+        recommendation: "持续观察 1 小时业务指标，恶化则回滚"
+
+    - id: end_low_risk
+      type: end
+      title: 低风险 - 无需回滚
+      outputs:
+        risk_level: "LOW"
+        action: "none"
+        assessment: "{{llm_risk_assess.result}}"
+        service_name: "{{start.service_name}}"
+        recommendation: "本次变更风险可控，无需回滚"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 90000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

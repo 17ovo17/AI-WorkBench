@@ -1,0 +1,108 @@
+workflow:
+  name: domain_diagnosis
+  description: 专项诊断 — 根据 domain 参数选择专项分析链路
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收专项诊断请求
+      inputs:
+        hostname: ""
+        time_range: "1h"
+        domain: "general"
+        app_name: ""
+        namespace: ""
+        pod_name: ""
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索领域知识
+      config:
+        query: "{{start.domain}} {{start.hostname}} {{start.app_name}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: http_metrics
+    - id: http_metrics
+      type: http_request
+      title: 获取实时指标
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/prometheus/metrics?ip={{start.hostname}}"
+        timeout: 15000
+      fallback: {on_error: continue, fallback_value: '{"metrics":{}}'}
+      next: code_domain_analyze
+    - id: code_domain_analyze
+      type: code
+      title: 领域专项分析
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var domain = inputs.domain || 'general';
+          var metrics = inputs.metrics || {};
+          var result = {domain: domain, findings: [], risk_level: 'low'};
+          if (domain === 'jvm') {
+            var gcCount = parseFloat(metrics.jvm_gc_pause_seconds_count) || 0;
+            var heapUsed = parseFloat(metrics.jvm_memory_used_bytes) || 0;
+            var heapMax = parseFloat(metrics.jvm_memory_max_bytes) || 1;
+            var heapRatio = heapUsed / heapMax;
+            if (heapRatio > 0.85) result.findings.push({metric:'heap_usage', value:heapRatio, threshold:0.85, status:'critical'});
+            if (gcCount > 10) result.findings.push({metric:'gc_frequency', value:gcCount, threshold:10, status:'warning'});
+          } else if (domain === 'db') {
+            var threads = parseFloat(metrics.mysql_threads_running) || 0;
+            var lockWaits = parseFloat(metrics.mysql_innodb_row_lock_waits) || 0;
+            if (threads > 50) result.findings.push({metric:'threads_running', value:threads, threshold:50, status:'critical'});
+            if (lockWaits > 100) result.findings.push({metric:'lock_waits', value:lockWaits, threshold:100, status:'warning'});
+          } else if (domain === 'container') {
+            var oomEvents = parseFloat(metrics.container_oom_events_total) || 0;
+            var restarts = parseFloat(metrics.kube_pod_container_status_restarts_total) || 0;
+            if (oomEvents > 0) result.findings.push({metric:'oom_events', value:oomEvents, threshold:0, status:'critical'});
+            if (restarts > 3) result.findings.push({metric:'restarts', value:restarts, threshold:3, status:'warning'});
+          } else {
+            var cpu = parseFloat(metrics.cpu_usage_active) || 0;
+            var mem = parseFloat(metrics.mem_used_percent) || 0;
+            var disk = parseFloat(metrics.disk_used_percent) || 0;
+            var ioAwait = parseFloat(metrics.disk_io_util) || 0;
+            if (cpu > 90) result.findings.push({metric:'cpu', value:cpu, threshold:90, status:'critical'});
+            if (mem > 90) result.findings.push({metric:'memory', value:mem, threshold:90, status:'critical'});
+            if (disk > 90) result.findings.push({metric:'disk', value:disk, threshold:90, status:'warning'});
+            if (ioAwait > 70) result.findings.push({metric:'io_util', value:ioAwait, threshold:70, status:'warning'});
+          }
+          result.risk_level = result.findings.some(function(f){return f.status==='critical';}) ? 'high' : result.findings.length > 0 ? 'medium' : 'low';
+          outputs = result;
+      inputs:
+        domain: "{{start.domain}}"
+        metrics: "{{http_metrics.response}}"
+      next: llm_specialist
+    - id: llm_specialist
+      type: llm
+      title: LLM 专项诊断
+      config:
+        system_prompt: |
+          根据 domain 切换角色：jvm→JVM调优专家(G1/ZGC/CMS)；db→MySQL DBA(InnoDB/执行计划)；container→K8s专家(Pod生命周期/OOM)；general/log→资深SRE(USE方法论)。
+          输出 JSON：{"domain":"领域","diagnosis":"结论","findings_analysis":[{"finding":"发现","interpretation":"解读","action":"建议"}],"risk_level":"high/medium/low","recommendations":[]}
+        user_prompt: |
+          主机: {{start.hostname}} | 领域: {{start.domain}} | 应用: {{start.app_name}}
+          命名空间: {{start.namespace}} | Pod: {{start.pod_name}}
+          分析结果: {{code_domain_analyze.findings}}
+          风险等级: {{code_domain_analyze.risk_level}}
+          全量指标: {{http_metrics.response}}
+          历史知识: {{knowledge_retrieval.results}}
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: end
+    - id: end
+      type: end
+      title: 输出专项诊断结果
+      outputs:
+        diagnosis: "{{llm_specialist.result}}"
+        domain: "{{start.domain}}"
+        findings: "{{code_domain_analyze.findings}}"
+        risk_level: "{{code_domain_analyze.risk_level}}"
+        metadata: {hostname: "{{start.hostname}}", app_name: "{{start.app_name}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    retry: {max_attempts: 1, backoff: 2000}

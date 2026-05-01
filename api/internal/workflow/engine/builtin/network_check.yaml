@@ -1,0 +1,129 @@
+workflow:
+  name: network_check
+  description: 网络连通性检测工作流 — 获取拓扑 → 批量检测端点 → 汇总矩阵 → LLM 分析
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收网络检测请求
+      inputs:
+        business_id: ""
+        target_ips: ""
+      next: http_topology
+
+    - id: http_topology
+      type: http_request
+      title: 获取业务拓扑
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/topology/businesses/{{start.business_id}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"hosts":[]}'
+      next: http_endpoints
+
+    - id: http_endpoints
+      type: http_request
+      title: 批量检测端点连通性
+      config:
+        method: POST
+        url: "http://127.0.0.1:8080/api/v1/aiops/network/check"
+        headers:
+          Content-Type: application/json
+        body:
+          hosts: "{{http_topology.hosts}}"
+          target_ips: "{{start.target_ips}}"
+        timeout: 30000
+      fallback:
+        on_error: continue
+        fallback_value: '{"results":[]}'
+      next: code_summary
+
+    - id: code_summary
+      type: code
+      title: 汇总连通性矩阵
+      config:
+        language: javascript
+        code: |
+          function main(inputs) {
+            var data = inputs.http_endpoints_response || '{"results":[]}';
+            var parsed = typeof data === 'string' ? JSON.parse(data) : data;
+            var results = parsed.results || [];
+            var success = 0, fail = 0, totalLatency = 0;
+            var failures = [];
+            for (var i = 0; i < results.length; i++) {
+              var r = results[i];
+              if (r.reachable) {
+                success++;
+                totalLatency += (r.latency_ms || 0);
+              } else {
+                fail++;
+                failures.push({ source: r.source, target: r.target, error: r.error });
+              }
+            }
+            var avgLatency = success > 0 ? Math.round(totalLatency / success) : 0;
+            return {
+              total: results.length, success: success, fail: fail,
+              avg_latency_ms: avgLatency, failures: failures.slice(0, 20)
+            };
+          }
+      fallback:
+        on_error: continue
+        fallback_value: '{"total":0,"success":0,"fail":0,"avg_latency_ms":0,"failures":[]}'
+      next: llm_report
+
+    - id: llm_report
+      type: llm
+      title: LLM 网络分析
+      config:
+        system_prompt: |
+          你是资深网络运维工程师，擅长网络故障排查。
+          请分析网络连通性检测结果，识别瓶颈和故障点。
+          输出 JSON 格式：
+          {"status":"healthy/degraded/critical","bottlenecks":[{"path":"源→目标","issue":"问题","severity":"high/medium/low"}],"recommendations":["建议1"],"summary":"一句话总结"}
+        user_prompt: |
+          ## 检测请求
+          业务 ID: {{start.business_id}}
+          目标 IP: {{start.target_ips}}
+
+          ## 拓扑信息
+          {{http_topology.response}}
+
+          ## 连通性汇总
+          总检测: {{code_summary.total}}
+          成功: {{code_summary.success}}
+          失败: {{code_summary.fail}}
+          平均延迟: {{code_summary.avg_latency_ms}}ms
+
+          ## 失败详情
+          {{code_summary.failures}}
+
+          请基于以上数据分析网络状况，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"status":"unknown","bottlenecks":[],"recommendations":[],"summary":"LLM 分析不可用"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出网络报告
+      outputs:
+        report: "{{llm_report.result}}"
+        business_id: "{{start.business_id}}"
+        connectivity_summary:
+          total: "{{code_summary.total}}"
+          success: "{{code_summary.success}}"
+          fail: "{{code_summary.fail}}"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

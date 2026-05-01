@@ -1,0 +1,153 @@
+workflow:
+  name: jvm_diagnosis
+  description: JVM 专项诊断工作流 — 知识检索 + JVM 指标采集 + GC 代码分析 + LLM 调优建议
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收 JVM 诊断请求
+      inputs:
+        hostname: ""
+        app_name: ""
+        time_range: "1h"
+      next: knowledge_retrieval
+
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索 JVM 历史案例
+      config:
+        query: "jvm full gc {{start.app_name}} {{start.hostname}}"
+        category: "jvm_full_gc"
+        top_k: 3
+        score_threshold: 0.3
+      fallback:
+        on_error: continue
+        fallback_value: "[]"
+      next: http_jvm_metrics
+
+    - id: http_jvm_metrics
+      type: http_request
+      title: 获取 JVM 指标
+      config:
+        method: POST
+        url: "http://127.0.0.1:8080/api/v1/aiops/data/prometheus/query"
+        headers:
+          Content-Type: application/json
+        body:
+          hostname: "{{start.hostname}}"
+          app_name: "{{start.app_name}}"
+          time_range: "{{start.time_range}}"
+          metrics: "jvm_gc_pause_seconds_max,jvm_gc_pause_seconds_sum,jvm_gc_pause_seconds_count,jvm_memory_pool_bytes_used,jvm_memory_pool_bytes_max,jvm_threads_live,jvm_classes_loaded,process_cpu_usage"
+        timeout: 15000
+      fallback:
+        on_error: continue
+        fallback_value: '{"metrics":{},"error":"prometheus_unavailable"}'
+      next: code_gc_analysis
+
+    - id: code_gc_analysis
+      type: code
+      title: GC 趋势分析
+      config:
+        language: javascript
+        timeout: 5000
+        code: |
+          function main(inputs) {
+            var raw = inputs.metrics_response || '{}';
+            var data;
+            try { data = JSON.parse(raw); } catch (e) { data = {}; }
+            var metrics = data.metrics || {};
+
+            var oldUsed = parseFloat(metrics['jvm_memory_pool_bytes_used{pool="PS Old Gen"}'] || metrics['jvm_memory_pool_bytes_used{pool="G1 Old Gen"}'] || 0);
+            var oldMax = parseFloat(metrics['jvm_memory_pool_bytes_max{pool="PS Old Gen"}'] || metrics['jvm_memory_pool_bytes_max{pool="G1 Old Gen"}'] || 1);
+            var oldRatio = oldMax > 0 ? (oldUsed / oldMax) : 0;
+
+            var gcSum = parseFloat(metrics['jvm_gc_pause_seconds_sum'] || 0);
+            var gcCount = parseFloat(metrics['jvm_gc_pause_seconds_count'] || 0);
+            var avgPause = gcCount > 0 ? (gcSum / gcCount) : 0;
+            var maxPause = parseFloat(metrics['jvm_gc_pause_seconds_max'] || 0);
+            var cpuUsage = parseFloat(metrics['process_cpu_usage'] || 0);
+
+            var risk = 'low';
+            var reasons = [];
+            if (oldRatio > 0.85) { risk = 'high'; reasons.push('老年代占用 ' + (oldRatio * 100).toFixed(1) + '% 超过 85%'); }
+            if (avgPause > 1.0) { risk = 'high'; reasons.push('GC 平均停顿 ' + avgPause.toFixed(2) + 's 超过 1s'); }
+            if (maxPause > 2.0) { risk = (risk === 'high' ? 'high' : 'medium'); reasons.push('GC 最大停顿 ' + maxPause.toFixed(2) + 's 超过 2s'); }
+            if (cpuUsage > 0.9 && avgPause > 0.5) { risk = 'high'; reasons.push('CPU ' + (cpuUsage * 100).toFixed(0) + '% + GC 高，疑似 GC 占据 CPU'); }
+
+            return {
+              old_gen_ratio: oldRatio,
+              avg_gc_pause: avgPause,
+              max_gc_pause: maxPause,
+              gc_count: gcCount,
+              cpu_usage: cpuUsage,
+              risk_level: risk,
+              risk_reasons: reasons
+            };
+          }
+      inputs:
+        metrics_response: "{{http_jvm_metrics.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"risk_level":"unknown","risk_reasons":["analysis_failed"]}'
+      next: llm_diagnosis
+
+    - id: llm_diagnosis
+      type: llm
+      title: LLM JVM 调优建议
+      config:
+        system_prompt: |
+          你是 JVM 性能调优专家。基于 GC 指标、风险分析和历史案例，提供根因诊断和调优方案。
+          关注：老年代占比、GC 停顿、Full GC 频率、CPU 与 GC 的相关性。
+          输出 JSON：{"root_cause":"根因描述","gc_algorithm_recommendation":"G1GC|ZGC|Parallel|当前合适","jvm_options":["建议参数1","建议参数2"],"action_plan":["处置步骤"],"confidence":"HIGH|MEDIUM|LOW"}
+        user_prompt: |
+          ## JVM 诊断请求
+          主机: {{start.hostname}}
+          应用: {{start.app_name}}
+          时间范围: {{start.time_range}}
+
+          ## JVM 指标
+          {{http_jvm_metrics.response}}
+
+          ## GC 风险分析
+          风险等级: {{code_gc_analysis.risk_level}}
+          原因: {{code_gc_analysis.risk_reasons}}
+          老年代占比: {{code_gc_analysis.old_gen_ratio}}
+          平均 GC 停顿: {{code_gc_analysis.avg_gc_pause}}s
+          最大 GC 停顿: {{code_gc_analysis.max_gc_pause}}s
+
+          ## 历史相似案例
+          {{knowledge_retrieval.results}}
+
+          请基于以上数据进行 JVM 诊断和调优，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"root_cause":"分析失败","confidence":"LOW"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出 JVM 诊断结果
+      outputs:
+        diagnosis: "{{llm_diagnosis.result}}"
+        confidence: "{{llm_diagnosis.confidence}}"
+        risk_level: "{{code_gc_analysis.risk_level}}"
+        gc_metrics:
+          old_gen_ratio: "{{code_gc_analysis.old_gen_ratio}}"
+          avg_pause: "{{code_gc_analysis.avg_gc_pause}}"
+          max_pause: "{{code_gc_analysis.max_gc_pause}}"
+        metadata:
+          hostname: "{{start.hostname}}"
+          app_name: "{{start.app_name}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 120000
+    node_timeout: 30000
+    retry:
+      max_attempts: 1
+      backoff: 2000

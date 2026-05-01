@@ -1,0 +1,812 @@
+{
+  "version": "1.0.0",
+  "description": "AIOps 智能问诊系统 PromQL 模板库 - 覆盖 25+ 常见故障场景",
+  "templates": [
+    {
+      "id": "cpu-001",
+      "category": "CPU",
+      "name": "CPU 使用率",
+      "description": "查询机器 CPU 使用率",
+      "promql": "cpu_usage_active{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 70,
+        "critical": 85
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "cpu-002",
+        "cpu-003",
+        "cpu-004"
+      ]
+    },
+    {
+      "id": "cpu-002",
+      "category": "CPU",
+      "name": "CPU IOWait",
+      "description": "CPU 等待 IO 的时间占比，高值表示磁盘瓶颈",
+      "promql": "cpu_usage_iowait{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 20,
+        "critical": 40
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "disk-001",
+        "disk-002"
+      ]
+    },
+    {
+      "id": "cpu-003",
+      "category": "CPU",
+      "name": "系统负载",
+      "description": "1分钟/5分钟/15分钟平均负载",
+      "promql": "cpu_load1{ident=~\"{{hosts}}\"} / cpu_count{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 2,
+        "critical": 4
+      },
+      "unit": "倍数",
+      "timeRange": "1h",
+      "related": [
+        "cpu-001",
+        "cpu-002"
+      ]
+    },
+    {
+      "id": "cpu-004",
+      "category": "CPU",
+      "name": "进程级 CPU 分布",
+      "description": "各进程 CPU 使用率 TOP10",
+      "promql": "topk(10, procstat_cpu_usage{ident=~\"{{hosts}}\"})",
+      "threshold": null,
+      "unit": "%",
+      "timeRange": "now",
+      "related": [
+        "cpu-001"
+      ]
+    },
+    {
+      "id": "cpu-005",
+      "category": "CPU",
+      "name": "CPU 使用率趋势对比",
+      "description": "对比当前与过去7天同期的 CPU 使用率",
+      "promql": "avg(cpu_usage_active{ident=~\"{{hosts}}\"}) - avg(cpu_usage_active{ident=~\"{{hosts}}\"} offset 7d)",
+      "threshold": {
+        "warning": 20,
+        "critical": 40
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "cpu-001"
+      ]
+    },
+    {
+      "id": "mem-001",
+      "category": "内存",
+      "name": "内存使用率",
+      "description": "物理内存使用率",
+      "promql": "mem_used_percent{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "mem-002",
+        "mem-003",
+        "mem-004"
+      ]
+    },
+    {
+      "id": "mem-002",
+      "category": "内存",
+      "name": "可用内存",
+      "description": "可用物理内存",
+      "promql": "mem_available{ident=~\"{{hosts}}\"} / 1024 / 1024 / 1024",
+      "threshold": {
+        "warning": 2,
+        "critical": 1
+      },
+      "unit": "GB",
+      "timeRange": "1h",
+      "related": [
+        "mem-001"
+      ]
+    },
+    {
+      "id": "mem-003",
+      "category": "内存",
+      "name": "Swap 使用率",
+      "description": "Swap 空间使用率，持续增长表示内存泄漏",
+      "promql": "mem_swap_used_percent{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 10,
+        "critical": 30
+      },
+      "unit": "%",
+      "timeRange": "24h",
+      "related": [
+        "mem-001",
+        "mem-004"
+      ]
+    },
+    {
+      "id": "mem-004",
+      "category": "内存",
+      "name": "内存增长趋势",
+      "description": "内存使用率 1 小时增长率",
+      "promql": "deriv(mem_used_percent{ident=~\"{{hosts}}\"}[1h]) * 3600",
+      "threshold": {
+        "warning": 5,
+        "critical": 10
+      },
+      "unit": "%/h",
+      "timeRange": "1h",
+      "related": [
+        "mem-001",
+        "mem-003"
+      ]
+    },
+    {
+      "id": "mem-005",
+      "category": "内存",
+      "name": "进程级内存 TOP10",
+      "description": "各进程内存 RSS 占用 TOP10",
+      "promql": "topk(10, procstat_mem_rss{ident=~\"{{hosts}}\"} / 1024 / 1024)",
+      "threshold": null,
+      "unit": "MB",
+      "timeRange": "now",
+      "related": [
+        "mem-001"
+      ]
+    },
+    {
+      "id": "disk-001",
+      "category": "磁盘",
+      "name": "磁盘使用率",
+      "description": "各分区磁盘使用率",
+      "promql": "disk_used_percent{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "disk-002",
+        "disk-003",
+        "disk-004"
+      ]
+    },
+    {
+      "id": "disk-002",
+      "category": "磁盘",
+      "name": "磁盘 IO 利用率",
+      "description": "磁盘 IO 时间占比，高值表示 IO 瓶颈",
+      "promql": "disk_io_util{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 70,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "disk-001",
+        "cpu-002"
+      ]
+    },
+    {
+      "id": "disk-003",
+      "category": "磁盘",
+      "name": "磁盘读写延迟",
+      "description": "磁盘平均读写延迟",
+      "promql": "disk_read_latency{ident=~\"{{hosts}}\"} or disk_write_latency{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 20,
+        "critical": 50
+      },
+      "unit": "ms",
+      "timeRange": "1h",
+      "related": [
+        "disk-002"
+      ]
+    },
+    {
+      "id": "disk-004",
+      "category": "磁盘",
+      "name": "磁盘写入速率",
+      "description": "磁盘写入 IOPS",
+      "promql": "rate(node_disk_writes_completed_total{ident=~\"{{hosts}}\"}[5m])",
+      "threshold": {
+        "warning": 1000,
+        "critical": 3000
+      },
+      "unit": "ops/s",
+      "timeRange": "1h",
+      "related": [
+        "disk-002"
+      ]
+    },
+    {
+      "id": "disk-005",
+      "category": "磁盘",
+      "name": "inode 使用率",
+      "description": "文件系统 inode 使用率",
+      "promql": "disk_inodes_used_percent{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "disk-001"
+      ]
+    },
+    {
+      "id": "net-001",
+      "category": "网络",
+      "name": "网络重传率",
+      "description": "TCP 重传包占比",
+      "promql": "rate(net_tcp_retrans_packets{ident=~\"{{hosts}}\"}[5m]) / rate(net_tcp_packets_sent{ident=~\"{{hosts}}\"}[5m]) * 100",
+      "threshold": {
+        "warning": 1,
+        "critical": 5
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "net-002",
+        "net-003"
+      ]
+    },
+    {
+      "id": "net-002",
+      "category": "网络",
+      "name": "网络丢包率",
+      "description": "网络接口丢包率",
+      "promql": "rate(net_drop_in{ident=~\"{{hosts}}\"}[5m]) / rate(net_packets_in{ident=~\"{{hosts}}\"}[5m]) * 100",
+      "threshold": {
+        "warning": 0.1,
+        "critical": 1
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "net-001"
+      ]
+    },
+    {
+      "id": "net-003",
+      "category": "网络",
+      "name": "TCP TimeWait",
+      "description": "TCP TIME_WAIT 状态连接数",
+      "promql": "net_tcp_time_wait{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 10000,
+        "critical": 30000
+      },
+      "unit": "个",
+      "timeRange": "1h",
+      "related": [
+        "net-004"
+      ]
+    },
+    {
+      "id": "net-004",
+      "category": "网络",
+      "name": "TCP 连接数",
+      "description": "当前 TCP 连接总数",
+      "promql": "net_tcp_established{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 5000,
+        "critical": 10000
+      },
+      "unit": "个",
+      "timeRange": "1h",
+      "related": [
+        "net-003"
+      ]
+    },
+    {
+      "id": "net-005",
+      "category": "网络",
+      "name": "带宽使用率",
+      "description": "网络带宽使用率",
+      "promql": "(rate(net_bits_recv{ident=~\"{{hosts}}\"}[5m]) + rate(net_bits_sent{ident=~\"{{hosts}}\"}[5m])) / net_speed{ident=~\"{{hosts}}\"} * 100",
+      "threshold": {
+        "warning": 70,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "net-001"
+      ]
+    },
+    {
+      "id": "app-001",
+      "category": "应用",
+      "name": "HTTP 请求 QPS",
+      "description": "服务 HTTP 请求速率",
+      "promql": "rate(http_requests_total{service=~\"{{services}}\"}[5m])",
+      "threshold": null,
+      "unit": "req/s",
+      "timeRange": "1h",
+      "related": [
+        "app-002",
+        "app-003"
+      ]
+    },
+    {
+      "id": "app-002",
+      "category": "应用",
+      "name": "HTTP 错误率",
+      "description": "HTTP 5xx 错误占比",
+      "promql": "rate(http_requests_total{service=~\"{{services}}\",status=~\"5..\"}[5m]) / rate(http_requests_total{service=~\"{{services}}\"}[5m]) * 100",
+      "threshold": {
+        "warning": 1,
+        "critical": 5
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "app-001",
+        "app-003"
+      ]
+    },
+    {
+      "id": "app-003",
+      "category": "应用",
+      "name": "HTTP P99 延迟",
+      "description": "HTTP 请求 P99 延迟",
+      "promql": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service=~\"{{services}}\"}[5m]))",
+      "threshold": {
+        "warning": 0.5,
+        "critical": 2
+      },
+      "unit": "s",
+      "timeRange": "1h",
+      "related": [
+        "app-001",
+        "app-002"
+      ]
+    },
+    {
+      "id": "app-004",
+      "category": "应用",
+      "name": "JVM 堆内存使用率",
+      "description": "Java 应用堆内存使用率",
+      "promql": "jvm_memory_heap_used_percent{service=~\"{{services}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "app-005",
+        "mem-001"
+      ]
+    },
+    {
+      "id": "app-005",
+      "category": "应用",
+      "name": "JVM GC 耗时",
+      "description": "GC 暂停时间",
+      "promql": "rate(jvm_gc_pause_seconds_sum{service=~\"{{services}}\"}[5m]) / rate(jvm_gc_pause_seconds_count{service=~\"{{services}}\"}[5m]) * 1000",
+      "threshold": {
+        "warning": 100,
+        "critical": 500
+      },
+      "unit": "ms",
+      "timeRange": "1h",
+      "related": [
+        "app-004"
+      ]
+    },
+    {
+      "id": "app-006",
+      "category": "应用",
+      "name": "线程池活跃线程数",
+      "description": "线程池使用率",
+      "promql": "threadpool_active_threads{service=~\"{{services}}\"} / threadpool_max_threads{service=~\"{{services}}\"} * 100",
+      "threshold": {
+        "warning": 70,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "app-001"
+      ]
+    },
+    {
+      "id": "app-007",
+      "category": "应用",
+      "name": "数据库连接池使用率",
+      "description": "数据库连接池活跃连接占比",
+      "promql": "datasource_active_connections{service=~\"{{services}}\"} / datasource_max_connections{service=~\"{{services}}\"} * 100",
+      "threshold": {
+        "warning": 70,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "db-001"
+      ]
+    },
+    {
+      "id": "db-001",
+      "category": "数据库",
+      "name": "MySQL 连接数",
+      "description": "MySQL 当前连接数",
+      "promql": "mysql_global_status_threads_connected{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 95
+      },
+      "unit": "个",
+      "timeRange": "1h",
+      "related": [
+        "db-002",
+        "db-003"
+      ]
+    },
+    {
+      "id": "db-002",
+      "category": "数据库",
+      "name": "MySQL 主从延迟",
+      "description": "主从复制延迟秒数",
+      "promql": "mysql_slave_lag_seconds{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 1,
+        "critical": 10
+      },
+      "unit": "s",
+      "timeRange": "1h",
+      "related": [
+        "db-001"
+      ]
+    },
+    {
+      "id": "db-003",
+      "category": "数据库",
+      "name": "MySQL 慢查询",
+      "description": "慢查询速率",
+      "promql": "rate(mysql_global_status_slow_queries{ident=~\"{{hosts}}\"}[5m])",
+      "threshold": {
+        "warning": 1,
+        "critical": 5
+      },
+      "unit": "qps",
+      "timeRange": "1h",
+      "related": [
+        "db-001"
+      ]
+    },
+    {
+      "id": "db-004",
+      "category": "数据库",
+      "name": "Redis 内存使用率",
+      "description": "Redis 内存使用占比",
+      "promql": "redis_memory_used_percent{ident=~\"{{hosts}}\"}",
+      "threshold": {
+        "warning": 80,
+        "critical": 90
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "db-005"
+      ]
+    },
+    {
+      "id": "db-005",
+      "category": "数据库",
+      "name": "Redis 命中率",
+      "description": "Redis 缓存命中率",
+      "promql": "redis_keyspace_hits{ident=~\"{{hosts}}\"} / (redis_keyspace_hits{ident=~\"{{hosts}}\"} + redis_keyspace_misses{ident=~\"{{hosts}}\"}) * 100",
+      "threshold": {
+        "warning": 80,
+        "critical": 60
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "db-004"
+      ]
+    },
+    {
+      "id": "mq-001",
+      "category": "消息队列",
+      "name": "Kafka 消费延迟",
+      "description": "消费者组消费延迟（lag）",
+      "promql": "kafka_consumer_group_lag{group=~\"{{services}}\"}",
+      "threshold": {
+        "warning": 1000,
+        "critical": 10000
+      },
+      "unit": "条",
+      "timeRange": "1h",
+      "related": [
+        "mq-002"
+      ]
+    },
+    {
+      "id": "mq-002",
+      "category": "消息队列",
+      "name": "Kafka 堆积趋势",
+      "description": "消息堆积增长率",
+      "promql": "deriv(kafka_consumer_group_lag{group=~\"{{services}}\"}[1h])",
+      "threshold": {
+        "warning": 100,
+        "critical": 500
+      },
+      "unit": "条/h",
+      "timeRange": "1h",
+      "related": [
+        "mq-001"
+      ]
+    },
+    {
+      "id": "k8s-001",
+      "category": "容器",
+      "name": "Pod CPU 使用率",
+      "description": "Pod CPU 使用占 request 比例",
+      "promql": "container_cpu_usage_seconds_total{pod=~\"{{services}}\"} / kube_pod_container_resource_requests{resource=\"cpu\",pod=~\"{{services}}\"} * 100",
+      "threshold": {
+        "warning": 80,
+        "critical": 100
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "k8s-002"
+      ]
+    },
+    {
+      "id": "k8s-002",
+      "category": "容器",
+      "name": "Pod 内存使用率",
+      "description": "Pod 内存使用占 limit 比例",
+      "promql": "container_memory_working_set_bytes{pod=~\"{{services}}\"} / kube_pod_container_resource_limits{resource=\"memory\",pod=~\"{{services}}\"} * 100",
+      "threshold": {
+        "warning": 80,
+        "critical": 95
+      },
+      "unit": "%",
+      "timeRange": "1h",
+      "related": [
+        "k8s-001"
+      ]
+    },
+    {
+      "id": "k8s-003",
+      "category": "容器",
+      "name": "Pod 重启次数",
+      "description": "Pod 容器重启次数",
+      "promql": "kube_pod_container_status_restarts_total{pod=~\"{{services}}\"}",
+      "threshold": {
+        "warning": 3,
+        "critical": 10
+      },
+      "unit": "次",
+      "timeRange": "24h",
+      "related": [
+        "k8s-001"
+      ]
+    },
+    {
+      "id": "inspect-001",
+      "category": "巡检",
+      "name": "集群健康概览",
+      "description": "集群各节点健康评分分布",
+      "promql": "avg(health_score{cluster=~\"{{clusters}}\"}) by (instance)",
+      "threshold": {
+        "warning": 70,
+        "critical": 50
+      },
+      "unit": "分",
+      "timeRange": "now",
+      "related": []
+    },
+    {
+      "id": "inspect-002",
+      "category": "巡检",
+      "name": "资源利用率 TOP10",
+      "description": "CPU 使用率最高的 10 台机器",
+      "promql": "topk(10, cpu_usage_active{cluster=~\"{{clusters}}\"})",
+      "threshold": null,
+      "unit": "%",
+      "timeRange": "now",
+      "related": []
+    },
+    {
+      "id": "inspect-003",
+      "category": "巡检",
+      "name": "磁盘即将耗尽预测",
+      "description": "基于线性回归预测磁盘耗尽时间",
+      "promql": "predict_linear(disk_used_percent{ident=~\"{{hosts}}\"}[7d], 7*24*3600)",
+      "threshold": {
+        "warning": 85,
+        "critical": 95
+      },
+      "unit": "%",
+      "timeRange": "7d",
+      "related": [
+        "disk-001"
+      ]
+    }
+  ],
+  "diagnosisChains": {
+    "cpu_high": {
+      "name": "CPU 高排查链",
+      "description": "CPU 使用率异常高的完整排查链路",
+      "steps": [
+        {
+          "templateId": "cpu-001",
+          "purpose": "确认 CPU 使用率"
+        },
+        {
+          "templateId": "cpu-003",
+          "purpose": "确认负载是否匹配 CPU 核数"
+        },
+        {
+          "templateId": "cpu-002",
+          "purpose": "判断是否 IO 等待导致"
+        },
+        {
+          "templateId": "cpu-004",
+          "purpose": "定位高 CPU 进程"
+        },
+        {
+          "templateId": "mem-001",
+          "purpose": "排除内存不足导致频繁 GC"
+        },
+        {
+          "templateId": "disk-002",
+          "purpose": "确认是否磁盘 IO 瓶颈"
+        }
+      ]
+    },
+    "memory_high": {
+      "name": "内存高排查链",
+      "description": "内存使用率异常高的完整排查链路",
+      "steps": [
+        {
+          "templateId": "mem-001",
+          "purpose": "确认内存使用率"
+        },
+        {
+          "templateId": "mem-003",
+          "purpose": "检查 Swap 使用情况"
+        },
+        {
+          "templateId": "mem-004",
+          "purpose": "判断增长趋势"
+        },
+        {
+          "templateId": "mem-005",
+          "purpose": "定位高内存进程"
+        },
+        {
+          "templateId": "app-004",
+          "purpose": "检查 JVM 堆内存（Java 应用）"
+        },
+        {
+          "templateId": "app-005",
+          "purpose": "检查 GC 频率"
+        }
+      ]
+    },
+    "disk_io_bottleneck": {
+      "name": "磁盘 IO 瓶颈排查链",
+      "description": "磁盘 IO 性能问题的完整排查链路",
+      "steps": [
+        {
+          "templateId": "disk-002",
+          "purpose": "确认 IO 利用率"
+        },
+        {
+          "templateId": "disk-003",
+          "purpose": "确认读写延迟"
+        },
+        {
+          "templateId": "disk-004",
+          "purpose": "确认写入速率"
+        },
+        {
+          "templateId": "cpu-002",
+          "purpose": "确认 CPU IOWait"
+        },
+        {
+          "templateId": "disk-001",
+          "purpose": "确认磁盘容量"
+        },
+        {
+          "templateId": "disk-005",
+          "purpose": "确认 inode 使用率"
+        }
+      ]
+    },
+    "service_slow": {
+      "name": "服务响应慢排查链",
+      "description": "HTTP 服务响应慢的完整排查链路",
+      "steps": [
+        {
+          "templateId": "app-003",
+          "purpose": "确认 P99 延迟"
+        },
+        {
+          "templateId": "app-002",
+          "purpose": "确认错误率"
+        },
+        {
+          "templateId": "app-001",
+          "purpose": "确认 QPS 是否突增"
+        },
+        {
+          "templateId": "cpu-001",
+          "purpose": "检查 CPU 是否瓶颈"
+        },
+        {
+          "templateId": "mem-001",
+          "purpose": "检查内存是否瓶颈"
+        },
+        {
+          "templateId": "db-001",
+          "purpose": "检查数据库连接池"
+        },
+        {
+          "templateId": "db-003",
+          "purpose": "检查慢查询"
+        },
+        {
+          "templateId": "db-004",
+          "purpose": "检查 Redis 内存"
+        },
+        {
+          "templateId": "mq-001",
+          "purpose": "检查消息队列堆积"
+        }
+      ]
+    },
+    "network_issue": {
+      "name": "网络问题排查链",
+      "description": "网络质量问题的完整排查链路",
+      "steps": [
+        {
+          "templateId": "net-001",
+          "purpose": "确认重传率"
+        },
+        {
+          "templateId": "net-002",
+          "purpose": "确认丢包率"
+        },
+        {
+          "templateId": "net-003",
+          "purpose": "检查 TIME_WAIT"
+        },
+        {
+          "templateId": "net-004",
+          "purpose": "检查连接数"
+        },
+        {
+          "templateId": "net-005",
+          "purpose": "检查带宽使用率"
+        }
+      ]
+    }
+  },
+  "variables": {
+    "{{hosts}}": "机器 IP 列表，如 '10.0.1.21|10.0.1.22'",
+    "{{services}}": "服务名列表，如 'order-api|pay-service'",
+    "{{clusters}}": "集群名，如 'beijing-prod'"
+  }
+}

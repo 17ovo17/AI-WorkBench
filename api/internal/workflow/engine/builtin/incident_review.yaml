@@ -1,0 +1,119 @@
+workflow:
+  name: incident_review
+  description: 故障回顾 — 多源数据并行采集 + 时间线重建 + LLM 复盘报告
+  version: "1.0.0"
+  nodes:
+    - id: start
+      type: start
+      title: 接收故障回顾请求
+      inputs:
+        hostname: ""
+        time_range: "6h"
+        mode: "timeline"
+        incident_summary: ""
+      next: http_alerts
+    - id: http_alerts
+      type: http_request
+      title: 获取告警记录
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/alerts?limit=50"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"items":[]}'}
+      next: code_timeline
+    - id: http_diagnoses
+      type: http_request
+      title: 获取诊断记录
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/diagnose?limit=50"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"items":[]}'}
+      next: code_timeline
+    - id: http_audit
+      type: http_request
+      title: 获取审计事件
+      parallel_group: incident_data
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/audit/events"
+        timeout: 10000
+      fallback: {on_error: continue, fallback_value: '{"events":[]}'}
+      next: code_timeline
+    - id: code_timeline
+      type: code
+      title: 时间线重建
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          var alerts = inputs.alerts || [];
+          var diags = inputs.diagnoses || [];
+          var audit = inputs.audit || [];
+          var timeline = [];
+          for (var i = 0; i < alerts.length; i++) { timeline.push({time:alerts[i].fired_at||alerts[i].created_at||'',type:'alert',severity:alerts[i].severity||'warning',detail:alerts[i].name||alerts[i].message||''}); }
+          for (var j = 0; j < diags.length; j++) { timeline.push({time:diags[j].created_at||'',type:'diagnosis',severity:'info',detail:diags[j].summary||diags[j].result||''}); }
+          for (var k = 0; k < audit.length; k++) { timeline.push({time:audit[k].timestamp||'',type:'audit',severity:'info',detail:audit[k].action||audit[k].message||''}); }
+          timeline.sort(function(a,b){return (a.time||'').localeCompare(b.time||'');});
+          var keyEvents = []; var firstAlert = null; var lastEvent = null;
+          for (var m = 0; m < timeline.length; m++) {
+            var ev = timeline[m];
+            if (ev.type==='alert' && !firstAlert) { firstAlert = ev; keyEvents.push({label:'首次告警',event:ev}); }
+            if (ev.type==='diagnosis') keyEvents.push({label:'诊断响应',event:ev});
+            lastEvent = ev;
+          }
+          if (lastEvent) keyEvents.push({label:'最后事件',event:lastEvent});
+          var mttrMin = 0;
+          if (firstAlert && lastEvent && firstAlert.time && lastEvent.time) {
+            var t1 = new Date(firstAlert.time).getTime(); var t2 = new Date(lastEvent.time).getTime();
+            if (!isNaN(t1) && !isNaN(t2)) mttrMin = Math.round((t2-t1)/60000);
+          }
+          outputs = {timeline:timeline.slice(0,50),mttr_minutes:mttrMin,mttd_minutes:0,key_events:keyEvents,event_count:timeline.length};
+      inputs:
+        alerts: "{{http_alerts.response.items}}"
+        diagnoses: "{{http_diagnoses.response.items}}"
+        audit: "{{http_audit.response.events}}"
+      next: knowledge_retrieval
+    - id: knowledge_retrieval
+      type: knowledge_retrieval
+      title: 检索复盘知识
+      config:
+        query: "故障复盘 {{start.hostname}} {{start.incident_summary}}"
+        top_k: 3
+        score_threshold: 0.3
+      fallback: {on_error: continue, fallback_value: "[]"}
+      next: llm_review
+    - id: llm_review
+      type: llm
+      title: LLM 故障复盘
+      config:
+        system_prompt: |
+          你是资深 SRE，擅长故障复盘。根据 mode 输出：
+          timeline: {"incident_summary":"","timeline_narrative":[{"time":"","event":"","impact":""}],"root_cause":"","causal_chain":"","mttr_minutes":0,"key_milestones":[]}
+          postmortem: {"incident_summary":"","root_cause":"","contributing_factors":[],"timeline_narrative":[],"what_went_well":[],"what_went_wrong":[],"action_items":[{"action":"","owner":"","priority":"","deadline":""}],"lessons_learned":[]}
+        user_prompt: |
+          主机: {{start.hostname}} | 模式: {{start.mode}} | 范围: {{start.time_range}}
+          概述: {{start.incident_summary}}
+          总事件: {{code_timeline.event_count}} | MTTR: {{code_timeline.mttr_minutes}}分钟
+          关键节点: {{code_timeline.key_events}}
+          时间线: {{code_timeline.timeline}}
+          参考: {{knowledge_retrieval.results}}
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      next: end
+    - id: end
+      type: end
+      title: 输出复盘报告
+      outputs:
+        report: "{{llm_review.result}}"
+        timeline: "{{code_timeline.timeline}}"
+        mttr_minutes: "{{code_timeline.mttr_minutes}}"
+        event_count: "{{code_timeline.event_count}}"
+        metadata: {hostname: "{{start.hostname}}", mode: "{{start.mode}}", workflow_version: "1.0.0"}
+  global:
+    error_handling: continue_on_failure
+    timeout: 180000
+    retry: {max_attempts: 1, backoff: 2000}

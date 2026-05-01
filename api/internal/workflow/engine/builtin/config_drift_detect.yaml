@@ -1,0 +1,115 @@
+workflow:
+  name: config_drift_detect
+  description: 配置漂移检测 — 采集运行配置 + 基线对比 + LLM 风险评估
+  version: "1.0.0"
+
+  nodes:
+    - id: start
+      type: start
+      title: 接收配置漂移检测请求
+      inputs:
+        service_name: ""
+        environment: ""
+        config_source: ""
+      next: http_running_config
+
+    - id: http_running_config
+      type: http_request
+      title: 采集运行配置
+      parallel_group: config_fetch
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/config/running?service={{start.service_name}}&env={{start.environment}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"config":{},"error":"unreachable"}'
+      next: code_diff_calc
+
+    - id: http_baseline_config
+      type: http_request
+      title: 采集基线配置
+      parallel_group: config_fetch
+      config:
+        method: GET
+        url: "http://127.0.0.1:8080/api/v1/aiops/config/baseline?service={{start.service_name}}&env={{start.environment}}"
+        timeout: 10000
+      fallback:
+        on_error: continue
+        fallback_value: '{"config":{},"error":"unreachable"}'
+      next: code_diff_calc
+
+    - id: code_diff_calc
+      type: code
+      title: 配置差异计算
+      config:
+        language: javascript
+        timeout: 10000
+        code: |
+          function main(inputs) {
+            var running = {}, baseline = {};
+            try { running = JSON.parse(inputs.running || '{}').config || {}; } catch(e) {}
+            try { baseline = JSON.parse(inputs.baseline || '{}').config || {}; } catch(e) {}
+            var allKeys = Object.keys(Object.assign({}, running, baseline));
+            var drifted = [];
+            for (var i = 0; i < allKeys.length; i++) {
+              var k = allKeys[i];
+              if (JSON.stringify(running[k]) !== JSON.stringify(baseline[k])) {
+                drifted.push({key: k, running: running[k], baseline: baseline[k]});
+              }
+            }
+            var total = allKeys.length || 1;
+            return {
+              drifted_keys: drifted,
+              drift_count: drifted.length,
+              drift_rate: (drifted.length / total * 100).toFixed(2) + '%',
+              total_keys: allKeys.length
+            };
+          }
+      inputs:
+        running: "{{http_running_config.response}}"
+        baseline: "{{http_baseline_config.response}}"
+      fallback:
+        on_error: continue
+        fallback_value: '{"drifted_keys":[],"drift_count":0,"drift_rate":"0%"}'
+      next: llm_risk_assess
+
+    - id: llm_risk_assess
+      type: llm
+      title: LLM 漂移风险评估
+      config:
+        system_prompt: |
+          你是配置漂移风险评估专家。分析配置差异，评估风险等级并给出修复建议。
+          输出 JSON：{"risk_level":"low|medium|high|critical","critical_drifts":[],"remediation_plan":[],"summary":""}
+        user_prompt: |
+          ## 配置漂移检测
+          服务: {{start.service_name}} | 环境: {{start.environment}}
+          漂移数量: {{code_diff_calc.drift_count}} | 漂移率: {{code_diff_calc.drift_rate}}
+          ## 漂移详情
+          {{code_diff_calc.drifted_keys}}
+          请评估风险并给出修复计划，严格按 JSON 格式输出。
+        temperature: 0.1
+        max_tokens: 2000
+        json_mode: true
+      fallback:
+        on_error: continue
+        fallback_value: '{"risk_level":"unknown","critical_drifts":[],"remediation_plan":[],"summary":"分析失败"}'
+      next: end
+
+    - id: end
+      type: end
+      title: 输出漂移检测结果
+      outputs:
+        analysis: "{{llm_risk_assess.result}}"
+        drift_count: "{{code_diff_calc.drift_count}}"
+        metadata:
+          service_name: "{{start.service_name}}"
+          environment: "{{start.environment}}"
+          workflow_version: "1.0.0"
+
+  global:
+    error_handling: continue_on_failure
+    timeout: 90000
+    retry:
+      max_attempts: 1
+      backoff: 2000

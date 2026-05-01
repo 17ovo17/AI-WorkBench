@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          app: prometheus
+  - job_name: ai-workbench-self
+    static_configs:
+      - targets: ['127.0.0.1:8080', '127.0.0.1:3000']
+  - job_name: discovered-targets
+    file_sd_configs:
+      - files:
+          - /opt/ai-workbench/docker/targets/*.yml
+          - /opt/ai-workbench/docker/targets/*.json
+        refresh_interval: 30s
+  - job_name: mock-test-targets
+    static_configs:
+      - targets: ['127.0.0.1:9100']
+        labels:
+          ident: '10.10.1.11'
+          target_ip: '10.10.1.11'
+          env: test
+      - targets: ['127.0.0.1:9101']
+        labels:
+          ident: '10.10.1.21'
+          target_ip: '10.10.1.21'
+          env: test
+      - targets: ['127.0.0.1:9102']
+        labels:
+          ident: '10.10.1.22'
+          target_ip: '10.10.1.22'
+          env: test
+      - targets: ['127.0.0.1:9103']
+        labels:
+          ident: '10.10.1.23'
+          target_ip: '10.10.1.23'
+          env: test
+      - targets: ['127.0.0.1:9104']
+        labels:
+          ident: '10.10.1.31'
+          target_ip: '10.10.1.31'
+          env: test
+      - targets: ['127.0.0.1:9105']
+        labels:
+          ident: '10.10.1.32'
+          target_ip: '10.10.1.32'
+          env: test

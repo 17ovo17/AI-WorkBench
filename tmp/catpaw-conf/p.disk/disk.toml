@@ -1,0 +1,77 @@
+[[instances]]
+## ===== 最小可用示例（30 秒跑起来）=====
+## 1) 默认会监控所有挂载点（排除 ignore_* 规则）
+## 2) space_usage/inode_usage 默认阈值已开启（90/99）
+## 3) 如果你只关心某个盘，配置 mount_points 即可
+## 例子：
+## mount_points = ["/", "/data*"]
+## 常见误区：
+## - 网络盘/NFS如果出故障，采集可能会hung住
+## - writable 检测需要写权限，权限不足会触发告警
+## - inode_usage 在部分平台/文件系统上可能不可用（会自动跳过）
+
+## 要监控的挂载点，支持 glob 模式
+## 留空 = 监控所有挂载点（排除 ignore 规则之后）
+## 示例: ["/", "/data*", "/home*"]
+# mount_points = []
+
+## 排除挂载点，支持 glob 模式（多平台规则可共存，匹配不到的自动跳过）
+ignore_mount_points = [
+    "/dev*", "/run*", "/sys*", "/proc*", "/snap*",         # Linux
+    "/System/Volumes/*", "/private/var/vm*",                # macOS
+]
+
+## 排除的文件系统类型（多平台规则可共存，匹配不到的自动跳过）
+## 如果要排除网络文件系统，可以继续增加类型，比如 nfs nfs4 cifs
+ignore_fs_types = [
+    "tmpfs", "devtmpfs", "squashfs", "overlay",            # Linux
+    "devfs", "autofs", "nullfs",                            # macOS
+]
+
+## 磁盘空间使用率阈值（禁用：不写或两个都设0）
+## check label 自动设为 "disk::space_usage"
+[instances.space_usage]
+warn_ge     = 90.0
+critical_ge = 99.0
+
+## inode 使用率阈值（禁用：不写或两个都设0）
+## Windows 下 InodesTotal=0 时自动跳过
+## check label 自动设为 "disk::inode_usage"
+[instances.inode_usage]
+warn_ge     = 90.0
+critical_ge = 99.0
+
+## 读写健康检测（severity 非空则启用）
+## 开启后会在每个挂载点下写入临时文件并读回校验，需要 catpaw 进程有写权限
+## check label 自动设为 "disk::writable"
+# [instances.writable]
+# severity = "Critical"
+# test_file = ".catpaw_disk_check"
+
+## 并发控制：同时检查的挂载点数量上限
+# concurrency = 10
+
+## 单次 Gather 超时时间
+## 超时后未完成的挂载点在下个周期会报 "检查卡住"（通常是 NFS/网络盘断连导致）
+# gather_timeout = "10s"
+
+## 采集间隔
+# interval = "30s"
+
+## 追加自定义标签
+# labels = { env = "production", team = "devops" }
+
+[instances.alerting]
+for_duration = 0
+repeat_interval = "5m"
+repeat_number = 3
+# disabled = false
+# disable_recovery_notification = false
+
+## AI 智能诊断（生效前提：config.toml 中已配置 [ai]）
+## 磁盘告警根因复杂（哪个目录增长？IO 瓶颈？LVM 快照？），AI 价值高
+[instances.diagnose]
+enabled = true
+# min_severity = "Warning"           # 最低触发级别: Warning(默认) / Critical
+# timeout = "120s"                   # 单次诊断超时
+# cooldown = "10m"                   # 同目标诊断冷却时间
