@@ -1,34 +1,27 @@
-ai:
-    api_key: ""
-    base_url: ""
-    default_model: "gpt-4o"
-    diagnose_model: "gpt-4o"
+# AI WorkBench 配置文件
+# 复制为 config.yaml 后修改
 
-mysql:
-    dsn: "root:password@tcp(127.0.0.1:3306)/ai_workbench?charset=utf8mb4&parseTime=true&loc=Local"
-
-redis:
-    addr: "127.0.0.1:6379"
-
+# 服务监听地址
 server:
     host: "0.0.0.0"
     port: "8080"
     allowed_origins:
         - "*"
 
+# MySQL 连接（必须，自动建表）
+mysql:
+    dsn: "root:yourpassword@tcp(127.0.0.1:3306)/ai_workbench?charset=utf8mb4&parseTime=true&loc=Local"
+
+# Redis 连接（可选，不配则使用内存缓存）
+redis:
+    addr: "127.0.0.1:6379"
+
+# Prometheus 数据源（可选，在前端「系统配置 → 数据源」中添加也可以）
 prometheus:
     instance_format: '{ip}:9100'
 
-embedding:
-    provider: "builtin"
-    api:
-        url: ""
-        key: ""
-        model: "text-embedding-v3"
-        dimensions: 1024
-        batch_size: 20
-
-reranker:
-    enabled: false
-    provider: "llm"
-    top_k: 5
+# 以下配置均通过前端界面管理，无需在此配置：
+# - AI 模型（前端「AI 模型」页面配置）
+# - Embedding/Reranker（前端「系统配置 → Embedding」页面配置）
+# - 数据源（前端「系统配置 → 数据源」页面配置）
+# - 告警通知渠道（前端「系统配置 → 值班通知」页面配置）
