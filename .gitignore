@@ -42,7 +42,10 @@ desktop.ini
 *.pem
 *.key
 
-# === AI 工具工作目录（全部排除） ===
+# === AI 工具配置（全局配置，不属于项目） ===
+CLAUDE.md
+AGENTS.md
+.mcp.json
 .claude/
 .codex/
 .playwright-mcp/
