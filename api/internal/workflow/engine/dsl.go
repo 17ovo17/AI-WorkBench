@@ -102,6 +102,16 @@ func LoadBuiltinWorkflow(name string) (*Graph, *EngineConfig, error) {
 	return ParseDSL(data)
 }
 
+// ReadBuiltinYAML 返回内置工作流的原始 YAML 文本（供前端 DSL 查看使用）。
+func ReadBuiltinYAML(name string) ([]byte, error) {
+	path := fmt.Sprintf("builtin/%s.yaml", name)
+	data, err := builtinFS.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read builtin yaml %q: %w", name, err)
+	}
+	return data, nil
+}
+
 func nodeFromDSL(n NodeDSL) *NodeConfig {
 	cfg := &NodeConfig{
 		ID:            n.ID,

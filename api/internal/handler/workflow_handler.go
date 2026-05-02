@@ -53,10 +53,16 @@ func GetWorkflow(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "builtin workflow not found"})
 			return
 		}
+		dsl, err := engine.ReadBuiltinYAML(name)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "read builtin yaml failed"})
+			return
+		}
 		c.JSON(http.StatusOK, model.Workflow{
 			ID:          id,
 			Name:        graph.Name,
 			Description: graph.Description,
+			DSL:         string(dsl),
 			Builtin:     true,
 		})
 		return
