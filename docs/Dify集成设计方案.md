@@ -22,7 +22,6 @@
 
 ## 三、Dify 源码关键信息
 
-源码位置：`D:\平台源码\dify-main\dify-main\`
 
 ### 3.1 MySQL 支持
 
