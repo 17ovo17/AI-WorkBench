@@ -82,12 +82,7 @@ workflow:
       type: llm
       title: LLM 指标解读
       config:
-        system_prompt: |
-          你是资深运维工程师，擅长指标分析和容量规划。根据 analysis_type 输出对应 JSON：
-          anomaly: {"summary":"","anomaly_analysis":[{"metric":"","value":"","interpretation":"","risk_level":"","action":""}],"correlation":"","overall_risk":""}
-          forecast: {"summary":"","capacity_analysis":[{"resource":"","current":"","days_remaining":0,"recommendation":""}],"priority":"","budget_estimate":""}
-          slo: {"summary":"","budget_status":"","burn_rate_analysis":"","recommendations":[]}
-          traffic: {"summary":"","pattern":"","anomaly_detected":false,"recommendations":[]}
+        system_prompt: "file://prompts/metrics_insight_llm_insight.txt"
         user_prompt: |
           主机: {{start.hostname}} | 类型: {{start.analysis_type}} | 关注: {{start.focus_area}}
           分析结果: {{code_multi_analysis}}

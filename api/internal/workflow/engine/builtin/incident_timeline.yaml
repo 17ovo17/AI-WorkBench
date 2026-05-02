@@ -92,11 +92,7 @@ workflow:
       type: llm
       title: LLM 故障叙事
       config:
-        system_prompt: |
-          你是资深 SRE 工程师，擅长故障复盘和时间线分析。
-          请基于合并后的时间线，生成故障叙事报告。
-          输出 JSON 格式：
-          {"incident_summary":"故障概述","timeline_narrative":[{"time":"时间","event":"事件","impact":"影响"}],"root_cause":"根因分析","causal_chain":"因果链描述","lessons_learned":["经验教训"],"recommendations":["改进建议"]}
+        system_prompt: "file://prompts/incident_timeline_llm_narrative.txt"
         user_prompt: |
           ## 故障时间线重建
           主机: {{start.hostname}}

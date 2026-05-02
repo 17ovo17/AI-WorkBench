@@ -119,9 +119,7 @@ workflow:
       type: llm
       title: LLM 审计报告
       config:
-        system_prompt: |
-          你是 SSL 证书审计专家。基于审计统计，输出执行摘要、风险评级和续签优先级。
-          输出 JSON：{"executive_summary":"摘要","risk_level":"HIGH|MEDIUM|LOW","priority_actions":[{"domain":"","action":"立即续签|7日内续签|30日内安排","priority":1}],"recommendations":["建议1","建议2"]}
+        system_prompt: "file://prompts/ssl_audit_llm_report.txt"
         user_prompt: |
           ## SSL 证书审计报告
 

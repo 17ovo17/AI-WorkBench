@@ -89,10 +89,7 @@ workflow:
       type: llm
       title: LLM 故障复盘
       config:
-        system_prompt: |
-          你是资深 SRE，擅长故障复盘。根据 mode 输出：
-          timeline: {"incident_summary":"","timeline_narrative":[{"time":"","event":"","impact":""}],"root_cause":"","causal_chain":"","mttr_minutes":0,"key_milestones":[]}
-          postmortem: {"incident_summary":"","root_cause":"","contributing_factors":[],"timeline_narrative":[],"what_went_well":[],"what_went_wrong":[],"action_items":[{"action":"","owner":"","priority":"","deadline":""}],"lessons_learned":[]}
+        system_prompt: "file://prompts/incident_review_llm_review.txt"
         user_prompt: |
           主机: {{start.hostname}} | 模式: {{start.mode}} | 范围: {{start.time_range}}
           概述: {{start.incident_summary}}

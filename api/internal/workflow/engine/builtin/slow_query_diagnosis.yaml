@@ -70,11 +70,7 @@ workflow:
       type: llm
       title: LLM 优化建议
       config:
-        system_prompt: |
-          你是资深 DBA，擅长 MySQL 慢查询优化。
-          请分析慢查询分类结果，给出具体优化建议。
-          输出 JSON 格式：
-          {"optimizations":[{"sql_sample":"SQL片段","issue":"问题","suggestion":"建议","priority":"high/medium/low"}],"index_recommendations":["索引建议"],"general_advice":["通用建议"],"summary":"一句话总结"}
+        system_prompt: "file://prompts/slow_query_diagnosis_llm_optimize.txt"
         user_prompt: |
           ## 诊断请求
           主机: {{start.hostname}}

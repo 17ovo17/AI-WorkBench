@@ -77,3 +77,27 @@ docs/testing/
 *.tmp
 *.bak
 tmp/
+
+# === 内部文档（不上传 GitHub）===
+docs/aiops/kimi-conversation-code-blocks.txt
+docs/aiops/topology_visualizer.reference.html
+docs/aiops/websocket_protocol.md
+docs/aiops/agent_integrated.md
+docs/main-log.md
+docs/Dify集成设计方案.md
+docs/任务看板.md
+docs/多Agent协作体系设计.md
+docs/开发日志.md
+
+# === 部署 / 测试脚本（环境强依赖）===
+scripts/deploy-prod.sh
+scripts/generate-test-data.py
+
+# === 二进制资产（禁止入库）===
+api/assets/catpaw_linux_amd64
+api/assets/*.bin
+api/assets/*.exe
+
+# === 旧版冗余种子（v3 已取代）===
+api/assets/seed_cases_v2.json
+api/assets/seed_runbooks_v2.json

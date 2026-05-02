@@ -85,9 +85,7 @@ workflow:
       type: llm
       title: LLM 流量异常分析
       config:
-        system_prompt: |
-          你是流量异常检测专家。基于 z-score 和历史知识，判断异常类型、严重程度并给出建议。
-          输出 JSON：{"anomaly_detected":true/false,"anomaly_type":"","severity":"low|medium|high|critical","possible_causes":[],"recommendations":[],"summary":""}
+        system_prompt: "file://prompts/traffic_anomaly_detect_llm_anomaly_analysis.txt"
         user_prompt: |
           ## 流量异常检测
           服务: {{start.service_name}} | 时间范围: {{start.time_range}}

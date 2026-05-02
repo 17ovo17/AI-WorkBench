@@ -96,10 +96,7 @@ workflow:
       type: llm
       title: LLM JVM 调优建议
       config:
-        system_prompt: |
-          你是 JVM 性能调优专家。基于 GC 指标、风险分析和历史案例，提供根因诊断和调优方案。
-          关注：老年代占比、GC 停顿、Full GC 频率、CPU 与 GC 的相关性。
-          输出 JSON：{"root_cause":"根因描述","gc_algorithm_recommendation":"G1GC|ZGC|Parallel|当前合适","jvm_options":["建议参数1","建议参数2"],"action_plan":["处置步骤"],"confidence":"HIGH|MEDIUM|LOW"}
+        system_prompt: "file://prompts/jvm_diagnosis_llm_diagnosis.txt"
         user_prompt: |
           ## JVM 诊断请求
           主机: {{start.hostname}}

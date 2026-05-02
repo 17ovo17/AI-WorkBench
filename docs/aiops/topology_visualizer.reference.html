@@ -1,9 +1,0 @@
-﻿# topology_visualizer.reference.html
-
-用户提供的独立 D3 拓扑页未在当前工作站下载目录中找到，因此本文件记录生产接入原则：
-
-- 不直接复制独立 HTML 到生产页面。
-- 生产实现复用 `web/src/components/BusinessTopologyCanvas.vue`。
-- 能力迁移目标：力导向/树形布局、健康状态外圈、层级形状、虚线/主从/注册链路、节点详情、风险视图、流量动画。
-- AIOps Workbench 通过 `topology_update` 事件更新画布，通过 `topology.highlightNodes/highlightPaths` 高亮异常节点和路径。
-- 拓扑节点点击回填“帮我诊断 {ip/service}”，实现拓扑到问诊的反向联动。

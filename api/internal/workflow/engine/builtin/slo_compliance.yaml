@@ -77,9 +77,7 @@ workflow:
       type: llm
       title: LLM SLO 综合分析
       config:
-        system_prompt: |
-          你是 SLO/SRE 专家。综合 SLI 指标和 Error Budget 数据，评估服务达标状态并给出建议。
-          输出 JSON：{"slo_status":"met|at_risk|breached","current_sli":"","error_budget_remaining_percent":"","burn_rate":"","recommendations":[],"summary":""}
+        system_prompt: "file://prompts/slo_compliance_llm_slo_analysis.txt"
         user_prompt: |
           ## SLO 达标分析
           服务: {{start.service_name}} | 目标: {{start.slo_target}}% | 时间范围: {{start.time_range}}

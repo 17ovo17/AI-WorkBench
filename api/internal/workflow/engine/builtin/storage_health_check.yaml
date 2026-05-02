@@ -85,9 +85,7 @@ workflow:
       type: llm
       title: LLM 存储健康评估
       config:
-        system_prompt: |
-          你是存储运维专家。基于磁盘/NFS/OSS 探活结果，评估整体健康状态并给出容量建议。
-          输出 JSON：{"overall_status":"healthy|warning|critical","storage_items":[],"urgent_actions":[],"capacity_recommendations":[],"summary":""}
+        system_prompt: "file://prompts/storage_health_check_llm_storage_analysis.txt"
         user_prompt: |
           ## 存储健康检查
           主机: {{start.hostname}} | 存储类型: {{start.storage_types}}

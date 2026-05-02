@@ -112,11 +112,7 @@ workflow:
       type: agent
       title: 安全执行命令
       config:
-        system_prompt: |
-          你是运维自动化执行器。请按照 Runbook 步骤，在目标主机上执行安全命令。
-          每执行一步，先用 query_prometheus 检查当前状态，再决定是否继续。
-          如果发现异常加剧，立即停止并报告。
-          目标主机: {{start.target_ip}}
+        system_prompt: "file://prompts/runbook_execute_agent_execute.txt"
         tools:
           - query_prometheus
           - search_knowledge

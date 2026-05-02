@@ -85,15 +85,7 @@ workflow:
       type: llm
       title: LLM 健康报告
       config:
-        system_prompt: |
-          你是运维巡检专家，基于多维度健康评分生成综合巡检报告。
-          请输出结构化 Markdown 报告，不要输出 JSON。
-          报告必须包含：
-          1. 巡检摘要表：主机、业务、范围、综合分、整体状态、结论。
-          2. 每台主机或当前主机的指标表格：CPU、内存、磁盘、网络、数据库、Redis、存储、状态、证据。
-          3. 异常汇总表：维度、异常项、当前分值或指标、严重级别、依据。
-          4. 处置建议：立即处理项、观察项、长期优化项。
-          必须基于输入中的真实 Prometheus/健康探测数据；缺失数据写“数据缺失”，不得补造。
+        system_prompt: "file://prompts/health_inspection_llm_health_report.txt"
         user_prompt: |
           主机: {{start.hostname}} | 业务: {{start.business_id}} | 范围: {{start.scope}}
           综合分: {{code_health_score.overall_score}} | 状态: {{code_health_score.status}}

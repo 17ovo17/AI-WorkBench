@@ -83,9 +83,7 @@ workflow:
       type: llm
       title: LLM 中间件评估
       config:
-        system_prompt: |
-          你是中间件运维专家。基于 Kafka/RabbitMQ/ES 探活结果，评估整体状态并给出优化建议。
-          输出 JSON：{"overall_status":"healthy|warning|critical","components":[],"urgent_actions":[],"optimization_suggestions":[],"summary":""}
+        system_prompt: "file://prompts/middleware_inspection_llm_middleware_summary.txt"
         user_prompt: |
           ## 中间件巡检
           业务 ID: {{start.business_id}} | 中间件类型: {{start.middleware_types}}

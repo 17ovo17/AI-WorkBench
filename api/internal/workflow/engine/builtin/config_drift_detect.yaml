@@ -78,9 +78,7 @@ workflow:
       type: llm
       title: LLM 漂移风险评估
       config:
-        system_prompt: |
-          你是配置漂移风险评估专家。分析配置差异，评估风险等级并给出修复建议。
-          输出 JSON：{"risk_level":"low|medium|high|critical","critical_drifts":[],"remediation_plan":[],"summary":""}
+        system_prompt: "file://prompts/config_drift_detect_llm_risk_assess.txt"
         user_prompt: |
           ## 配置漂移检测
           服务: {{start.service_name}} | 环境: {{start.environment}}

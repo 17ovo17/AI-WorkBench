@@ -59,10 +59,7 @@ workflow:
       type: llm
       title: LLM 安全分析
       config:
-        system_prompt: |
-          你是信息安全专家，擅长审计事件分析和合规评估。
-          根据审计类型切换关注点：security→未授权访问/权限变更/异常登录；ssl→证书过期/弱加密/TLS版本；config→配置漂移/未授权变更/合规偏差。
-          输出 JSON：{"audit_type":"","summary":"","risk_level":"critical/high/medium/low","findings":[{"category":"","description":"","severity":"","evidence":"","recommendation":""}],"compliance_gaps":[],"action_items":[]}
+        system_prompt: "file://prompts/security_compliance_llm_security_analysis.txt"
         user_prompt: |
           类型: {{start.audit_type}} | 范围: {{start.time_range}} | 最低风险: {{start.min_risk}}
           总事件: {{code_risk_score.total_events}} | 风险等级: {{code_risk_score.overall_risk_level}}

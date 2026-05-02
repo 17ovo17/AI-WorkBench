@@ -94,7 +94,7 @@ workflow:
       type: llm
       title: LLM 5-Why 复盘报告
       config:
-        system_prompt: "你是故障复盘专家。基于时间线数据，使用5-Why方法分析根因并生成复盘报告。输出JSON：{\"incident_title\":\"\",\"duration_minutes\":0,\"mttr_minutes\":0,\"five_whys\":[],\"root_cause\":\"\",\"action_items\":[],\"summary\":\"\"}"
+        system_prompt: "file://prompts/incident_postmortem_llm_postmortem.txt"
         user_prompt: |
           故障复盘 — 主机: {{start.hostname}} | 范围: {{start.time_range}}
           概述: {{start.incident_summary}}

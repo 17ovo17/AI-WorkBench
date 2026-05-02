@@ -79,16 +79,7 @@ workflow:
       type: llm
       title: LLM 根因分析
       config:
-        system_prompt: |
-          你是资深 SRE，使用 USE 方法论（Utilization/Saturation/Errors）进行根因分析。
-          请输出结构化 Markdown 诊断报告，不要输出 JSON。
-          报告必须包含：
-          1. 摘要表：主机、时间范围、触发来源、严重级别、结论、置信度。
-          2. Prometheus 证据表：指标名、真实值、状态、说明；只能使用输入中的真实 Prometheus 数据和关联分析。
-          3. 根因分析：按 USE（利用率/饱和度/错误）分段说明证据链。
-          4. 处置建议：立即止血、根治措施、回滚/风险提示。
-          5. PromQL 验证命令：给出可直接复制执行的 PromQL，例如 CPU、内存、磁盘、网络、负载或告警验证查询。
-          如果数据不足，请列出缺失数据和建议采集的 PromQL，禁止编造指标值。
+        system_prompt: "file://prompts/smart_diagnosis_llm_diagnosis.txt"
         user_prompt: |
           主机: {{start.hostname}} | 范围: {{start.time_range}} | 触发: {{start.trigger}} | 严重: {{start.severity}}
           问题: {{start.user_question}}
